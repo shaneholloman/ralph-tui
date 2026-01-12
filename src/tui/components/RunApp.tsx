@@ -609,10 +609,11 @@ export function RunApp({
 
   useKeyboard(handleKeyboard);
 
-  // Calculate layout
+  // Calculate layout - account for dashboard height when visible
+  const dashboardHeight = showDashboard ? layout.progressDashboard.height : 0;
   const contentHeight = Math.max(
     1,
-    height - layout.header.height - layout.footer.height
+    height - layout.header.height - layout.footer.height - dashboardHeight
   );
   const isCompact = width < 80;
 

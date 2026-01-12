@@ -126,6 +126,10 @@ export const layout = {
   footer: {
     height: 3,
   },
+  progressDashboard: {
+    // Height when dashboard is shown: 2 (border) + 2 (padding) + 4 (content rows)
+    height: 8,
+  },
   leftPanel: {
     minWidth: 30,
     maxWidth: 50,

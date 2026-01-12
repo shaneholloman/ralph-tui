@@ -5,7 +5,7 @@
  */
 
 import type { ReactNode } from 'react';
-import { colors, statusIndicators, formatElapsedTime, type RalphStatus } from '../theme.js';
+import { colors, statusIndicators, formatElapsedTime, layout, type RalphStatus } from '../theme.js';
 
 /**
  * Props for the ProgressDashboard component
@@ -173,12 +173,13 @@ export function ProgressDashboard({
     <box
       style={{
         width: '100%',
+        height: layout.progressDashboard.height,
         flexDirection: 'column',
         backgroundColor: colors.bg.secondary,
         padding: 1,
         border: true,
         borderColor: colors.border.normal,
-        gap: 1,
+        overflow: 'hidden',
       }}
     >
       {/* Top row: Status and Epic name */}
