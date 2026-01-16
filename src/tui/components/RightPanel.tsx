@@ -14,7 +14,6 @@ import type { FormattedSegment } from '../../plugins/agents/output-formatting.js
 import { formatElapsedTime } from '../theme.js';
 import { SubagentSections } from './SubagentSection.js';
 import { parseAgentOutput } from '../output-parser.js';
-import { FormattedText } from './FormattedText.js';
 
 /**
  * Priority label mapping for display
@@ -572,8 +571,9 @@ function TaskOutputView({
     return parseAgentOutput(iterationOutput, agentName);
   }, [iterationOutput, isLiveStreaming, agentName]);
 
-  // Use segments during live streaming for colored output
-  const displaySegments = isLiveStreaming ? iterationSegments : undefined;
+  // Note: iterationSegments available for TUI-native colors but disabled
+  // due to OpenTUI background rendering artifacts
+  void iterationSegments;
 
   // Parse model info for display
   const modelDisplay = currentModel
@@ -648,10 +648,8 @@ function TaskOutputView({
         }}
       >
         <scrollbox style={{ flexGrow: 1, padding: 1 }}>
-          {/* Prefer segments for TUI-native colors during live streaming */}
-          {displaySegments && displaySegments.length > 0 ? (
-            <FormattedText segments={displaySegments} />
-          ) : displayOutput !== undefined && displayOutput.length > 0 ? (
+          {/* Use plain text output - segment colors disabled due to OpenTUI background artifacts */}
+          {displayOutput !== undefined && displayOutput.length > 0 ? (
             <text fg={colors.fg.secondary}>{displayOutput}</text>
           ) : displayOutput === '' ? (
             <text fg={colors.fg.muted}>No output captured</text>
