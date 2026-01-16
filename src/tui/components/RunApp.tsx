@@ -808,12 +808,9 @@ export function RunApp({
           }
           break;
 
-        case 'c':
-          // Ctrl+C to stop
-          if (key.name === 'c') {
-            engine.stop();
-          }
-          break;
+        // Note: 'c' / Ctrl+C is intentionally NOT handled here.
+        // Ctrl+C and Ctrl+Shift+C send the same sequence (\x03) in most terminals,
+        // so we can't distinguish between "stop" and "copy". Users should use 'q' to quit.
 
         case 'v':
           // Toggle between tasks and iterations view (only if not in detail view)

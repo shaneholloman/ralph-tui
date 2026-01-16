@@ -7,6 +7,7 @@
 
 import { spawn } from 'node:child_process';
 import { BaseAgentPlugin, findCommandPath } from '../base.js';
+import { formatToolCall, formatError } from '../output-formatting.js';
 import type {
   AgentPluginMeta,
   AgentPluginFactory,
@@ -14,6 +15,7 @@ import type {
   AgentExecuteOptions,
   AgentSetupQuestion,
   AgentDetectResult,
+  AgentExecutionHandle,
 } from '../types.js';
 
 /**
@@ -328,6 +330,91 @@ export class ClaudeAgentPlugin extends BaseAgentPlugin {
     _options?: AgentExecuteOptions
   ): string {
     return prompt;
+  }
+
+  /**
+   * Parse a Claude JSONL event and extract displayable content.
+   * Returns formatted string for TUI display, or empty string if not displayable.
+   */
+  private parseClaudeEventForDisplay(jsonLine: string): string {
+    if (!jsonLine || jsonLine.length === 0) return '';
+
+    try {
+      const event = JSON.parse(jsonLine) as Record<string, unknown>;
+
+      // Handle assistant messages with tool use
+      if (event.type === 'assistant' && event.tool) {
+        const tool = event.tool as { name?: string; input?: Record<string, unknown> };
+        if (tool.name) {
+          return formatToolCall(tool.name, tool.input);
+        }
+      }
+
+      // Handle text content from assistant
+      if (event.type === 'assistant' && typeof event.message === 'string') {
+        return event.message;
+      }
+
+      // Handle result events (final output)
+      if (event.type === 'result' && typeof event.result === 'string') {
+        return event.result;
+      }
+
+      // Handle error events
+      if (event.type === 'error' || event.error) {
+        const errorMsg = typeof event.error === 'string'
+          ? event.error
+          : (event.error as { message?: string })?.message ?? 'Unknown error';
+        return '\n' + formatError(errorMsg) + '\n';
+      }
+
+      return '';
+    } catch {
+      // Not valid JSON - return as-is if non-empty
+      const trimmed = jsonLine.trim();
+      if (trimmed.length > 0 && !trimmed.startsWith('{')) {
+        return trimmed + '\n';
+      }
+      return '';
+    }
+  }
+
+  /**
+   * Process Claude stream output - parses JSONL events and formats for display.
+   */
+  private processClaudeOutput(data: string): string {
+    return data
+      .split('\n')
+      .map((line) => this.parseClaudeEventForDisplay(line.trim()))
+      .filter((content) => content.length > 0)
+      .join('');
+  }
+
+  /**
+   * Override execute to parse Claude JSONL output for display.
+   * Wraps the onStdout callback to format tool calls and messages.
+   */
+  override execute(
+    prompt: string,
+    files?: AgentFileContext[],
+    options?: AgentExecuteOptions
+  ): AgentExecutionHandle {
+    // Wrap onStdout to parse JSONL events when using stream-json output
+    const isStreamingJson = options?.subagentTracing || this.printMode === 'json' || this.printMode === 'stream';
+
+    const parsedOptions: AgentExecuteOptions = {
+      ...options,
+      onStdout: options?.onStdout && isStreamingJson
+        ? (data: string) => {
+            const parsed = this.processClaudeOutput(data);
+            if (parsed.length > 0) {
+              options.onStdout!(parsed);
+            }
+          }
+        : options?.onStdout,
+    };
+
+    return super.execute(prompt, files, parsedOptions);
   }
 
   override async validateSetup(

@@ -4,6 +4,7 @@
  */
 
 import type { ClaudeJsonlMessage } from '../builtin/claude.js';
+import { formatToolCall, formatError } from '../output-formatting.js';
 
 export interface DroidToolCall {
   id?: string;
@@ -387,22 +388,6 @@ function normalizeToolInput(
   return argumentsValue;
 }
 
-function formatToolArguments(argumentsValue?: Record<string, unknown> | string): string {
-  if (!argumentsValue) {
-    return '';
-  }
-
-  if (typeof argumentsValue === 'string') {
-    return argumentsValue.trim();
-  }
-
-  try {
-    return JSON.stringify(argumentsValue);
-  } catch {
-    return '[unserializable arguments]';
-  }
-}
-
 export class DroidCostAccumulator {
   private summary: DroidCostSummary = {
     inputTokens: 0,
@@ -508,16 +493,17 @@ export function formatDroidEventForDisplay(message: DroidJsonlMessage): string |
 
   if (message.error) {
     const statusSuffix = message.error.status ? ` (status ${message.error.status})` : '';
-    return `Error${statusSuffix}: ${message.error.message}`;
+    return formatError(`${message.error.message}${statusSuffix}`);
   }
 
   if (message.toolCalls && message.toolCalls.length > 0) {
     return message.toolCalls
       .map((call) => {
-        const args = formatToolArguments(call.arguments);
-        return args ? `Tool call: ${call.name} ${args}` : `Tool call: ${call.name}`;
+        // Normalize arguments to Record<string, unknown> for formatToolCall
+        const input = normalizeToolInput(call.arguments);
+        return formatToolCall(call.name, input);
       })
-      .join('\n');
+      .join('');
   }
 
   if (message.toolResults && message.toolResults.length > 0) {
@@ -525,9 +511,9 @@ export function formatDroidEventForDisplay(message: DroidJsonlMessage): string |
       .map((result) => {
         const status = result.status ? ` (${result.status})` : '';
         const content = result.content ? `: ${result.content}` : '';
-        return `Tool result${status}${content}`;
+        return `Tool result${status}${content}\n`;
       })
-      .join('\n');
+      .join('');
   }
 
   if (message.message) {

@@ -1,0 +1,170 @@
+/**
+ * ABOUTME: Shared output formatting utilities for agent plugins.
+ * Provides ANSI colors and consistent tool call formatting across all agents.
+ */
+
+/**
+ * Color formatting disabled - TUI framework escapes ANSI codes.
+ * Using plain text formatting for now.
+ * TODO: Implement TUI-native color rendering via React components
+ */
+export const COLORS = {
+  blue: '',
+  purple: '',
+  cyan: '',
+  green: '',
+  yellow: '',
+  pink: '',
+  muted: '',
+  reset: '',
+} as const;
+
+/**
+ * Format a tool name with consistent styling (blue like accent.primary).
+ * @param toolName The name of the tool (e.g., "glob", "read", "bash")
+ * @returns Formatted string with theme colors
+ */
+export function formatToolName(toolName: string): string {
+  return `${COLORS.blue}[${toolName}]${COLORS.reset}`;
+}
+
+/**
+ * Format a file path with consistent styling (purple like accent.secondary).
+ * @param path The file path
+ * @returns Formatted string with theme colors
+ */
+export function formatPath(path: string): string {
+  return `${COLORS.purple}${path}${COLORS.reset}`;
+}
+
+/**
+ * Format a bash command with $ prefix.
+ * Extracts the actual command from environment setup noise.
+ * @param command The command string (may include env vars)
+ * @returns Formatted string with just the meaningful command
+ */
+export function formatCommand(command: string): string {
+  // Normalize newlines to spaces
+  let cmd = command.replace(/\n/g, ' ').trim();
+
+  // Extract actual command from env var setup
+  // Pattern: ENV_VAR=value ... ; actual_command
+  if (cmd.includes(';')) {
+    const parts = cmd.split(';');
+    cmd = parts[parts.length - 1].trim();
+  }
+
+  // Also handle inline env vars before command (VAR=val VAR2=val2 command)
+  // If the command starts with lots of VAR= patterns, try to find the actual command
+  const envVarPattern = /^(\s*\w+=[^\s]*\s+)+/;
+  if (envVarPattern.test(cmd)) {
+    cmd = cmd.replace(envVarPattern, '').trim();
+  }
+
+  // Truncate very long commands
+  if (cmd.length > 100) {
+    cmd = cmd.slice(0, 100) + '...';
+  }
+
+  return `$ ${cmd}`;
+}
+
+/**
+ * Format an error message (pink like status.error).
+ * @param message The error message
+ * @returns Formatted string with theme colors
+ */
+export function formatError(message: string): string {
+  return `${COLORS.pink}[Error: ${message}]${COLORS.reset}`;
+}
+
+/**
+ * Format a search pattern or query (cyan like accent.tertiary).
+ * @param pattern The pattern or query string
+ * @returns Formatted string with theme colors
+ */
+export function formatPattern(pattern: string): string {
+  return `pattern: ${COLORS.cyan}${pattern}${COLORS.reset}`;
+}
+
+/**
+ * Format a URL (cyan like accent.tertiary).
+ * @param url The URL string
+ * @returns Formatted string with theme colors
+ */
+export function formatUrl(url: string): string {
+  return `${COLORS.cyan}${url}${COLORS.reset}`;
+}
+
+/**
+ * Common tool input field names and their formatters.
+ * Used to automatically extract and format tool call details.
+ */
+export interface ToolInputFormatters {
+  /** Bash command */
+  command?: string;
+  /** File path */
+  file_path?: string;
+  path?: string;
+  /** Search pattern */
+  pattern?: string;
+  /** URL */
+  url?: string;
+  /** Query string */
+  query?: string;
+  /** Description */
+  description?: string;
+  /** Content for write/edit operations */
+  content?: string;
+  /** Old string for edit operations */
+  old_string?: string;
+  /** New string for edit operations */
+  new_string?: string;
+}
+
+/**
+ * Format tool call details from input fields.
+ * Automatically detects and formats common tool input patterns.
+ * @param toolName The tool name
+ * @param input The tool input object (can have various fields)
+ * @returns Formatted string for display
+ */
+export function formatToolCall(toolName: string, input?: ToolInputFormatters): string {
+  const parts: string[] = [formatToolName(toolName)];
+
+  if (!input) {
+    return parts.join(' ') + '\n';
+  }
+
+  // Add relevant details based on tool type
+  if (input.description) {
+    parts.push(input.description);
+  }
+  if (input.command) {
+    parts.push(formatCommand(input.command));
+  }
+  if (input.file_path || input.path) {
+    parts.push(formatPath(input.file_path || input.path || ''));
+  }
+  if (input.pattern) {
+    parts.push(formatPattern(input.pattern));
+  }
+  if (input.query) {
+    parts.push(`query: ${COLORS.yellow}${input.query}${COLORS.reset}`);
+  }
+  if (input.url) {
+    parts.push(formatUrl(input.url));
+  }
+  if (input.content) {
+    // For write/edit operations, show preview of content
+    const preview = input.content.length > 200
+      ? `${input.content.slice(0, 200)}... (${input.content.length} chars)`
+      : input.content;
+    parts.push(`"${preview}"`);
+  }
+  if (input.old_string && input.new_string) {
+    parts.push(`edit: "${input.old_string.slice(0, 50)}..." → "${input.new_string.slice(0, 50)}..."`);
+  }
+
+  return parts.join(' ') + '\n';
+}
