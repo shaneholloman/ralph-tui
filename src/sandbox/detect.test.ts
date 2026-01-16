@@ -14,6 +14,10 @@ describe('commandExists', () => {
   });
 
   test('returns true for which command', async () => {
+    // 'which' doesn't exist on Windows (uses 'where' instead)
+    if (process.platform === 'win32') {
+      return; // Skip on Windows
+    }
     // 'which' should exist on Linux/macOS
     const result = await commandExists('which');
     expect(result).toBe(true);
