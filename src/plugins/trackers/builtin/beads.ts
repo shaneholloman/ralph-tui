@@ -428,7 +428,7 @@ export class BeadsTrackerPlugin extends BaseTrackerPlugin {
     id: string,
     reason?: string
   ): Promise<TaskCompletionResult> {
-    // Use --force to close tasks even if parent epic is still open
+    // Use --force to ensure close succeeds even if issue is pinned
     const args = ['close', id, '--force'];
 
     if (reason) {

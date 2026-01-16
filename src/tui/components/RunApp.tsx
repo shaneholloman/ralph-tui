@@ -845,7 +845,7 @@ export function RunApp({
             // First start - use onStart callback
             setStatus('running');
             onStart();
-          } else if ((status === 'stopped' || status === 'idle') && engine) {
+          } else if (status === 'stopped' || status === 'idle') {
             // Continue after stop - use engine.continueExecution()
             if (currentIteration >= maxIterations) {
               // At max iterations, add one more then continue
@@ -979,7 +979,7 @@ export function RunApp({
           break;
       }
     },
-    [displayedTasks, selectedIndex, status, engine, onQuit, viewMode, iterations, iterationSelectedIndex, iterationHistoryLength, onIterationDrillDown, showInterruptDialog, onInterruptConfirm, onInterruptCancel, showHelp, showSettings, showQuitDialog, showEpicLoader, onStart, storedConfig, onSaveSettings, onLoadEpics, subagentDetailLevel, onSubagentPanelVisibilityChange]
+    [displayedTasks, selectedIndex, status, engine, onQuit, viewMode, iterations, iterationSelectedIndex, iterationHistoryLength, onIterationDrillDown, showInterruptDialog, onInterruptConfirm, onInterruptCancel, showHelp, showSettings, showQuitDialog, showEpicLoader, onStart, storedConfig, onSaveSettings, onLoadEpics, subagentDetailLevel, onSubagentPanelVisibilityChange, currentIteration, maxIterations]
   );
 
   useKeyboard(handleKeyboard);

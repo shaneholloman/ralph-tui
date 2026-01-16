@@ -151,6 +151,9 @@ When the bead is complete, close it using the \`bd close\` command:
 # Close the bead with a descriptive reason
 bd close [bead-id] --reason "What was implemented"
 
+# If running from a different directory, specify the database path:
+bd close [bead-id] --db /path/to/.beads/beads.db --reason "What was implemented"
+
 # Example
 bd close devtuneai-001 --reason "Added search index table with name and category fields"
 \`\`\`
@@ -191,6 +194,7 @@ bd show [bead-id]
 
 # Close a bead
 bd close [bead-id] --reason "..."
+bd close [bead-id] --db <path> --reason "..."  # When in different directory
 
 # List beads
 bd list --labels="ralph"           # All ralph beads
