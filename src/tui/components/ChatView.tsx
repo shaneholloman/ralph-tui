@@ -456,14 +456,19 @@ export function ChatView({
           />
         </box>
 
-        {/* Hint bar */}
+        {/* Hint bar - positioned on bottom border */}
         <box
           style={{
+            position: 'absolute',
+            bottom: 0,
+            left: 2,
+            right: 2,
             height: 1,
             flexDirection: 'row',
             justifyContent: 'center',
             alignItems: 'center',
             gap: 1,
+            backgroundColor: colors.bg.secondary,
           }}
         >
           {isLoading ? (
