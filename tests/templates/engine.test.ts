@@ -3,12 +3,13 @@
  * Tests template resolution hierarchy, installation, loading, and rendering.
  */
 
-import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
-import { mkdir, rm, writeFile, readFile } from 'node:fs/promises';
+import { describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test';
+import { mkdir, rm, writeFile, readFile, chmod } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
+import * as templateEngine from '../../src/templates/engine.js';
 import {
   getBuiltinTemplate,
   getTemplateTypeFromPlugin,
@@ -522,12 +523,20 @@ describe('Template Engine - Loading (Filesystem)', () => {
 
 describe('Template Engine - Installation', () => {
   let testDir: string;
+  let getUserConfigDirSpy: ReturnType<typeof spyOn>;
 
   beforeEach(async () => {
     testDir = await createTestDir();
+    // Sandbox user config by mocking getUserConfigDir to return a temp directory
+    // This prevents tests from polluting ~/.config/ralph-tui/templates
+    getUserConfigDirSpy = spyOn(templateEngine, 'getUserConfigDir').mockReturnValue(
+      join(testDir, '.config', 'ralph-tui')
+    );
   });
 
   afterEach(async () => {
+    // Restore original getUserConfigDir behavior
+    getUserConfigDirSpy.mockRestore();
     await cleanupTestDir(testDir);
   });
 
@@ -614,14 +623,16 @@ describe('Template Engine - Installation', () => {
 
   describe('installBuiltinTemplates', () => {
     test('installs all four builtin templates', () => {
-      // Note: This test would modify the actual user config directory
-      // In a real scenario, we'd mock the filesystem or use a custom dir
-      // For now, we verify the function structure works
+      // HOME is sandboxed to testDir, so templates go to testDir/.config/ralph-tui/templates
       const result = installBuiltinTemplates(false);
 
       // The function returns results for all four templates
       expect(result.results.length).toBe(4);
       expect(result.templatesDir).toContain('.config/ralph-tui/templates');
+      // Verify it's using the sandboxed directory
+      expect(result.templatesDir.startsWith(testDir)).toBe(true);
+      // Verify templates were actually created
+      expect(result.results.every(r => r.created || r.skipped)).toBe(true);
     });
   });
 
@@ -913,13 +924,21 @@ describe('Template Engine - Integration', () => {
 
 describe('Template Engine - Error Handling', () => {
   let testDir: string;
+  let getUserConfigDirSpy: ReturnType<typeof spyOn>;
 
   beforeEach(async () => {
     testDir = await createTestDir();
     clearTemplateCache();
+    // Sandbox user config by mocking getUserConfigDir to return a temp directory
+    // This prevents tests from polluting ~/.config/ralph-tui/templates
+    getUserConfigDirSpy = spyOn(templateEngine, 'getUserConfigDir').mockReturnValue(
+      join(testDir, '.config', 'ralph-tui')
+    );
   });
 
   afterEach(async () => {
+    // Restore original getUserConfigDir behavior
+    getUserConfigDirSpy.mockRestore();
     await cleanupTestDir(testDir);
   });
 
@@ -1022,36 +1041,49 @@ describe('Template Engine - Error Handling', () => {
   });
 
   describe('copyBuiltinTemplate - Error Cases', () => {
-    test('returns error for invalid destination path', () => {
-      // Try to copy to a path with null bytes (invalid on most filesystems)
-      const invalidPath = '/invalid\0path/template.hbs';
+    test('returns error for invalid destination path with null bytes', () => {
+      // Null bytes in paths are invalid on all platforms (POSIX and Windows)
+      // This is a portable way to test path validation
+      const invalidPath = join(testDir, 'invalid\0byte', 'template.hbs');
       const result = copyBuiltinTemplate('beads', invalidPath);
 
       expect(result.success).toBe(false);
       expect(result.error).toBeDefined();
     });
 
-    test('returns error when destination directory cannot be created', () => {
-      // Try to create in a non-writable location (if running as non-root)
-      // This test may be skipped on some systems
-      const restrictedPath = '/root/no-access/template.hbs';
-      const result = copyBuiltinTemplate('beads', restrictedPath);
+    test('returns error when destination directory is read-only', async () => {
+      // Create a directory and make it read-only to test permission errors
+      // Skip on Windows where chmod doesn't work the same way
+      if (process.platform === 'win32') {
+        // Windows doesn't support POSIX chmod semantics - skip this test
+        return;
+      }
 
-      // Will fail on most systems unless running as root
-      if (!result.success) {
+      const readOnlyDir = join(testDir, 'read-only-dir');
+      await mkdir(readOnlyDir, { recursive: true });
+
+      try {
+        // Remove write permissions (read + execute only)
+        await chmod(readOnlyDir, 0o555);
+
+        const destPath = join(readOnlyDir, 'subdir', 'template.hbs');
+        const result = copyBuiltinTemplate('beads', destPath);
+
+        // Should fail because we can't create a subdirectory in read-only dir
+        expect(result.success).toBe(false);
         expect(result.error).toBeDefined();
+      } finally {
+        // Restore write permissions so cleanup can proceed
+        await chmod(readOnlyDir, 0o755);
       }
     });
   });
 
   describe('installGlobalTemplates - Function Behavior', () => {
-    // Note: installGlobalTemplates modifies the user's actual global config directory
-    // We only test the return value structure, not the file system side effects
-    // to avoid polluting the user's real config during test runs
+    // HOME is sandboxed to testDir, so we can safely test actual file system side effects
 
     test('returns correct structure with templatesDir and results', () => {
-      // Use an empty templates object to avoid modifying user's config
-      const templates = {};
+      const templates = { 'test-tracker': '## Test Template' };
 
       const result = installGlobalTemplates(templates, false);
 
@@ -1059,6 +1091,8 @@ describe('Template Engine - Error Handling', () => {
       expect(result).toHaveProperty('templatesDir');
       expect(result).toHaveProperty('results');
       expect(result.templatesDir).toContain('.config/ralph-tui/templates');
+      // Verify it's using the sandboxed directory
+      expect(result.templatesDir.startsWith(testDir)).toBe(true);
       expect(Array.isArray(result.results)).toBe(true);
     });
 
@@ -1067,6 +1101,25 @@ describe('Template Engine - Error Handling', () => {
 
       expect(result.success).toBe(true);
       expect(result.results.length).toBe(0);
+      // Verify sandboxed directory
+      expect(result.templatesDir.startsWith(testDir)).toBe(true);
+    });
+
+    test('actually creates template files in sandboxed directory', async () => {
+      const templates = { 'sandbox-test': '## Sandboxed Template Content' };
+
+      const result = installGlobalTemplates(templates, false);
+
+      expect(result.success).toBe(true);
+      expect(result.results.length).toBe(1);
+      expect(result.results[0]?.created).toBe(true);
+
+      // Verify file was actually created in sandboxed location
+      const expectedPath = join(testDir, '.config', 'ralph-tui', 'templates', 'sandbox-test.hbs');
+      expect(existsSync(expectedPath)).toBe(true);
+
+      const content = await readFile(expectedPath, 'utf-8');
+      expect(content).toBe('## Sandboxed Template Content');
     });
   });
 });
