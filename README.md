@@ -142,8 +142,9 @@ ralph-tui create-prd --output ./docs
 | `s` | Start execution |
 | `p` | Pause/Resume |
 | `d` | Toggle dashboard |
-| `i` | Toggle iteration history |
-| `u` | Toggle subagent tracing |
+| `T` | Toggle subagent tree panel (Shift+T) |
+| `t` | Cycle subagent detail level |
+| `o` | Cycle right panel views |
 | `q` | Quit |
 | `?` | Show help |
 | `1-9` | Switch to tab 1-9 (remote instances) |
@@ -153,10 +154,17 @@ See the [full CLI reference](https://ralph-tui.com/docs/cli/overview) for all op
 
 ### Using Skills Directly in Your Agent
 
-After running `ralph-tui setup`, skills are installed to `~/.claude/skills/` and can be used directly in Claude Code:
+After running `ralph-tui setup`, skills are installed to your agent's skills directory:
+
+| Agent | Skills Location |
+|-------|-----------------|
+| Claude Code | `~/.claude/skills/` |
+| OpenCode | `~/.config/opencode/skills/` |
+| Factory Droid | `~/.factory/skills/` |
+
+Use these slash commands in your agent:
 
 ```bash
-# In Claude Code, use these slash commands:
 /ralph-tui-prd           # Create a PRD interactively
 /ralph-tui-create-json   # Convert PRD to prd.json
 /ralph-tui-create-beads  # Convert PRD to Beads issues

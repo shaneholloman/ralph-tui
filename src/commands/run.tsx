@@ -638,6 +638,8 @@ interface RunAppWrapperProps {
   sandboxConfig?: SandboxConfig;
   /** Resolved sandbox mode (when mode is 'auto', this shows what it resolved to) */
   resolvedSandboxMode?: Exclude<SandboxMode, 'auto'>;
+  /** Whether to show the epic loader immediately on startup (for json tracker without PRD path) */
+  initialShowEpicLoader?: boolean;
 }
 
 /**
@@ -661,6 +663,7 @@ function RunAppWrapper({
   currentModel,
   sandboxConfig,
   resolvedSandboxMode,
+  initialShowEpicLoader = false,
 }: RunAppWrapperProps) {
   const [showInterruptDialog, setShowInterruptDialog] = useState(false);
   const [storedConfig, setStoredConfig] = useState<StoredConfig | undefined>(initialStoredConfig);
@@ -829,6 +832,7 @@ function RunAppWrapper({
       onSelectTab={handleSelectTab}
       connectionToast={connectionToast}
       instanceManager={instanceManager}
+      initialShowEpicLoader={initialShowEpicLoader}
     />
   );
 }
@@ -1059,6 +1063,7 @@ async function runWithTui(
       currentModel={config.model}
       sandboxConfig={config.sandbox}
       resolvedSandboxMode={resolvedSandboxMode}
+      initialShowEpicLoader={config.tracker.plugin === 'json' && !config.prdPath}
     />
   );
 

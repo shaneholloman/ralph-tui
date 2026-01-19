@@ -365,6 +365,21 @@ These flags override config file settings. Use with any execution command.
 |------|------|-------------|
 | `--prompt <path>` | string | Custom prompt template |
 
+#### Prompt Template Precedence
+
+Ralph TUI resolves prompt templates in this order (first match wins):
+
+| Priority | Source | Description |
+|----------|--------|-------------|
+| 1 | CLI or config path | `--prompt <path>` flag or `prompt_template` in config |
+| 2 | Project template | `.ralph-tui-prompt.hbs` or path in `.ralph-tui/config.toml` |
+| 3 | User template | `~/.config/ralph-tui/prompt.md` or `prompt-{tracker}.md` |
+| 4 | Built-in default | Bundled fallback template for the tracker type |
+
+<Callout type="tip">
+Use `ralph-tui template show` to see which template would be used, and `ralph-tui template init` to scaffold a custom template at the appropriate location.
+</Callout>
+
 ### Notification Options
 
 | Flag | Type | Description |
