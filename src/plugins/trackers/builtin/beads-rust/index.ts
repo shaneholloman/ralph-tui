@@ -5,8 +5,10 @@
  */
 
 import { spawn } from 'node:child_process';
-import { access, constants } from 'node:fs/promises';
-import { join } from 'node:path';
+import { constants, readFileSync } from 'node:fs';
+import { access } from 'node:fs/promises';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { BaseTrackerPlugin } from '../../base.js';
 import type {
   SyncResult,
@@ -18,6 +20,16 @@ import type {
   TrackerTask,
   TrackerTaskStatus,
 } from '../../types.js';
+
+/**
+ * Get the directory containing this module (for locating template.hbs).
+ */
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+/**
+ * Cache for the template content to avoid repeated file reads.
+ */
+let templateCache: string | null = null;
 
 /**
  * Raw task structure from br list --json output.
@@ -359,14 +371,18 @@ export class BeadsRustTrackerPlugin extends BaseTrackerPlugin {
    */
   override async getEpics(): Promise<TrackerTask[]> {
     const args = ['list', '--json', '--type', 'epic'];
+
     if (this.labels.length > 0) {
       args.push('--label', this.labels.join(','));
     }
+
     const { stdout, exitCode, stderr } = await execBr(args, this.workingDir);
+
     if (exitCode !== 0) {
       console.error('br list --type epic failed:', stderr);
       return [];
     }
+
     let tasksJson: BrTaskJson[];
     try {
       tasksJson = JSON.parse(stdout) as BrTaskJson[];
@@ -374,9 +390,11 @@ export class BeadsRustTrackerPlugin extends BaseTrackerPlugin {
       console.error('Failed to parse br list --type epic output:', err);
       return [];
     }
+
     const tasks = tasksJson.map(brTaskToTask);
     return tasks.filter(
-      (t) => !t.parentId && (t.status === 'open' || t.status === 'in_progress')
+      (t) =>
+        !t.parentId && (t.status === 'open' || t.status === 'in_progress')
     );
   }
 
@@ -557,6 +575,32 @@ export class BeadsRustTrackerPlugin extends BaseTrackerPlugin {
       message: 'Beads-rust tracker data flushed to JSONL',
       syncedAt: new Date().toISOString(),
     };
+  }
+
+  /**
+   * Get the prompt template for the beads-rust tracker.
+   * Reads from the co-located template.hbs file.
+   */
+  override getTemplate(): string {
+    if (templateCache !== null) {
+      return templateCache;
+    }
+
+    const templatePath = join(__dirname, 'template.hbs');
+    try {
+      templateCache = readFileSync(templatePath, 'utf-8');
+      return templateCache;
+    } catch (err) {
+      console.error(`Failed to read template from ${templatePath}:`, err);
+      return `## Task: {{taskTitle}}
+{{#if taskDescription}}
+{{taskDescription}}
+{{/if}}
+
+When finished, signal completion with:
+<promise>COMPLETE</promise>
+`;
+    }
   }
 }
 

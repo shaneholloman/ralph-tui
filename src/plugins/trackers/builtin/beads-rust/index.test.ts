@@ -45,6 +45,18 @@ mock.module('node:child_process', () => ({
   },
 }));
 
+mock.module('node:fs', () => ({
+  constants: {
+    R_OK: 4,
+  },
+  readFileSync: (path: string) => {
+    if (path.endsWith('template.hbs')) {
+      return 'br close {{taskId}}\nbr sync --flush-only\n';
+    }
+    return '';
+  },
+}));
+
 mock.module('node:fs/promises', () => ({
   access: async () => {
     if (mockAccessShouldFail) {
@@ -722,6 +734,17 @@ describe('BeadsRustTrackerPlugin', () => {
       expect(mockSpawnArgs.length).toBe(1);
       expect(mockSpawnArgs[0]?.cmd).toBe('br');
       expect(mockSpawnArgs[0]?.args).toEqual(['sync', '--flush-only']);
+    });
+  });
+
+  describe('getTemplate', () => {
+    test('returns a br-specific template with br close and br sync --flush-only', () => {
+      const plugin = new BeadsRustTrackerPlugin();
+      const template = plugin.getTemplate();
+
+      expect(template).toContain('br close');
+      expect(template).toContain('br sync --flush-only');
+      expect(template).not.toContain('bd close');
     });
   });
 });
