@@ -705,7 +705,8 @@ export async function listIterationLogs(
   // Legacy: iteration-{NNN}-{taskId}.log
   // New: {sessionId}_{timestamp}_{taskId}.log (e.g., a1b2c3d4_2024-01-15_10-30-45_BEAD-001.log)
   const legacyPattern = /^iteration-\d+-.*\.log$/;
-  const newPattern = /^[a-f0-9]{8}_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_.*\.log$/;
+  // sessionId token: one or more non-underscore chars; timestamp: YYYY-MM-DD_HH-mm-ss; taskId: anything
+  const newPattern = /^[^_]+_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_.*\.log$/;
   const logFiles = files
     .filter((f) => legacyPattern.test(f) || newPattern.test(f))
     .sort(); // Sort by filename (for initial ordering, will be re-sorted by timestamp below)
@@ -859,13 +860,16 @@ export async function getIterationLogCount(cwd: string): Promise<number> {
 }
 
 /**
- * Check if any iteration logs exist.
+ * Check if any iteration logs exist (either legacy or new format).
  */
 export async function hasIterationLogs(cwd: string): Promise<boolean> {
   const dir = getIterationsDir(cwd);
   try {
     const files = await readdir(dir);
-    return files.some((f) => f.startsWith('iteration-') && f.endsWith('.log'));
+    // Match both legacy (iteration-NNN-taskId.log) and new (sessionId_timestamp_taskId.log) formats
+    const legacyPattern = /^iteration-\d+-.*\.log$/;
+    const newPattern = /^[^_]+_\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_.*\.log$/;
+    return files.some((f) => legacyPattern.test(f) || newPattern.test(f));
   } catch {
     return false;
   }

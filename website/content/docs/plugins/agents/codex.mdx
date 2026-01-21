@@ -132,7 +132,7 @@ fullAuto = true
 
 ## Subagent Tracing
 
-Codex emits structured JSONL when running with `--json`. Ralph TUI parses this to display:
+Codex emits structured JSONL via `--json` (always enabled). Ralph TUI parses this to display:
 
 - Tool invocations and their output
 - Duration and status of each operation
@@ -154,7 +154,7 @@ When Ralph TUI executes a task with Codex:
 1. **Build command**: Constructs `codex exec [options]`
 2. **Pass prompt via stdin**: Avoids shell escaping issues with special characters
 3. **Stream output**: Captures stdout/stderr in real-time
-4. **Parse JSONL** (if tracing enabled): Extracts structured tool call data
+4. **Parse JSONL**: Extracts structured tool call data (always enabled)
 5. **Detect completion**: Watches for completion token
 6. **Handle exit**: Reports success, failure, or timeout
 
@@ -165,7 +165,7 @@ Ralph TUI builds these arguments:
 ```bash
 codex exec \
   --full-auto \                    # When fullAuto enabled
-  --json \                         # When tracing enabled
+  --json \                         # Always used for structured output
   --model gpt-4 \                  # If model specified
   --sandbox workspace-write \      # Sandbox mode
   < prompt.txt                     # Prompt via stdin

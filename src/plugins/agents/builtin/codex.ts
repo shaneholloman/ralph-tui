@@ -332,20 +332,41 @@ export class CodexAgentPlugin extends BaseAgentPlugin {
    * Override execute to parse Codex JSON output.
    * Wraps the onStdout/onStdoutSegments callbacks to parse JSONL events and extract displayable content.
    * Also forwards raw JSONL messages to onJsonlMessage for subagent tracing.
+   *
+   * Uses buffering to handle JSONL records that may be split across chunks.
    */
   override execute(
     prompt: string,
     files?: AgentFileContext[],
     options?: AgentExecuteOptions
   ): AgentExecutionHandle {
+    // Buffer for incomplete JSONL lines split across chunks
+    let jsonlBuffer = '';
+
     // Wrap callbacks to parse JSON events
     const parsedOptions: AgentExecuteOptions = {
       ...options,
       onStdout: (options?.onStdout || options?.onStdoutSegments || options?.onJsonlMessage)
         ? (data: string) => {
+            // Prepend any buffered partial line from previous chunk
+            const combined = jsonlBuffer + data;
+
+            // Split into lines - last element may be incomplete
+            const lines = combined.split('\n');
+
+            // If data doesn't end with newline, last line is incomplete - buffer it
+            if (!data.endsWith('\n')) {
+              jsonlBuffer = lines.pop() || '';
+            } else {
+              jsonlBuffer = '';
+            }
+
+            // Process complete lines
+            const completeData = lines.join('\n');
+
             // Parse raw JSONL lines and forward to onJsonlMessage for subagent tracing
             if (options?.onJsonlMessage) {
-              for (const line of data.split('\n')) {
+              for (const line of lines) {
                 const trimmed = line.trim();
                 if (trimmed && trimmed.startsWith('{')) {
                   try {
@@ -359,7 +380,7 @@ export class CodexAgentPlugin extends BaseAgentPlugin {
             }
 
             // Process for display events
-            const events = parseCodexOutputToEvents(data);
+            const events = parseCodexOutputToEvents(completeData);
             if (events.length > 0) {
               // Call TUI-native segments callback if provided
               if (options?.onStdoutSegments) {
