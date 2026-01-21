@@ -322,10 +322,8 @@ export class BeadsRustTrackerPlugin extends BaseTrackerPlugin {
     // Always include closed tasks; UI controls visibility.
     const args = ['list', '--json', '--all'];
 
+    // Note: br list doesn't support --parent, so we filter in-memory below
     const parentId = filter?.parentId ?? this.epicId;
-    if (parentId) {
-      args.push('--parent', parentId);
-    }
 
     const labelsToFilter =
       filter?.labels && filter.labels.length > 0 ? filter.labels : this.labels;
@@ -354,8 +352,15 @@ export class BeadsRustTrackerPlugin extends BaseTrackerPlugin {
 
     let tasks = tasksJson.map(brTaskToTask);
 
-    // If we already scoped to a parent via --parent, remove it from in-memory
-    // filtering to avoid relying on parentId presence in JSON output.
+    // Filter by parent (br list doesn't support --parent)
+    if (parentId) {
+      const childIds = await this.getChildIds(parentId);
+      if (childIds.size > 0) {
+        tasks = tasks.filter((t) => childIds.has(t.id));
+      }
+    }
+
+    // Apply remaining filters (excluding parentId which we handled above)
     const filterWithoutParent = parentId
       ? filter
         ? { ...filter, parentId: undefined }
@@ -432,6 +437,44 @@ export class BeadsRustTrackerPlugin extends BaseTrackerPlugin {
    * selection (dependency-aware), since br list output may not contain enough
    * dependency information for client-side readiness filtering.
    */
+  /**
+   * Get child IDs for a parent epic/task.
+   * Uses br show to get dependents with parent-child relationship.
+   */
+  private async getChildIds(parentId: string): Promise<Set<string>> {
+    const { stdout, exitCode } = await execBr(
+      ['show', parentId, '--json'],
+      this.workingDir
+    );
+
+    if (exitCode !== 0) {
+      return new Set();
+    }
+
+    try {
+      const tasks = JSON.parse(stdout) as BrTaskJson[];
+      if (tasks.length === 0) {
+        return new Set();
+      }
+
+      const task = tasks[0]!;
+      const childIds = new Set<string>();
+
+      // dependents with dep_type 'parent-child' are children
+      if (task.dependents) {
+        for (const dep of task.dependents) {
+          if (dep.dependency_type === 'parent-child') {
+            childIds.add(dep.id);
+          }
+        }
+      }
+
+      return childIds;
+    } catch {
+      return new Set();
+    }
+  }
+
   override async getNextTask(filter?: TaskFilter): Promise<TrackerTask | undefined> {
     const args = ['ready', '--json'];
 
@@ -441,9 +484,12 @@ export class BeadsRustTrackerPlugin extends BaseTrackerPlugin {
       typeof filter?.limit === 'number' && filter.limit > 0 ? filter.limit : 10;
     args.push('--limit', String(Math.max(10, requestedLimit)));
 
+    // Note: br ready doesn't support --parent, so we filter in-memory below
     const parentId = filter?.parentId ?? this.epicId;
+
+    // Exclude epics from ready results when filtering by parent
     if (parentId) {
-      args.push('--parent', parentId);
+      args.push('--type', 'task');
     }
 
     const labelsToFilter =
@@ -485,6 +531,14 @@ export class BeadsRustTrackerPlugin extends BaseTrackerPlugin {
     }
 
     let tasks = tasksJson.map(brTaskToTask);
+
+    // Filter by parent (br ready doesn't support --parent)
+    if (parentId) {
+      const childIds = await this.getChildIds(parentId);
+      if (childIds.size > 0) {
+        tasks = tasks.filter((t) => childIds.has(t.id));
+      }
+    }
 
     // Exclude specific task IDs (used by engine for skipped/failed tasks)
     if (filter?.excludeIds && filter.excludeIds.length > 0) {
@@ -626,24 +680,18 @@ export class BeadsRustTrackerPlugin extends BaseTrackerPlugin {
         return null;
       }
 
-      const childrenResult = await execBr(
-        ['list', '--json', '--all', '--parent', epicId],
-        this.workingDir
-      );
-
+      // Get children count from epic's dependents (br list doesn't support --parent)
       let completedCount = 0;
       let totalCount = 0;
 
-      if (childrenResult.exitCode === 0) {
-        try {
-          const children = JSON.parse(childrenResult.stdout) as BrTaskJson[];
-          totalCount = children.length;
-          completedCount = children.filter(
-            (c) => c.status === 'closed' || c.status === 'cancelled'
-          ).length;
-        } catch {
-          // Ignore malformed list output and return 0/0 counts.
-        }
+      if (epic.dependents) {
+        const children = epic.dependents.filter(
+          (d) => d.dependency_type === 'parent-child'
+        );
+        totalCount = children.length;
+        completedCount = children.filter(
+          (c) => c.status === 'closed' || c.status === 'cancelled'
+        ).length;
       }
 
       return {
