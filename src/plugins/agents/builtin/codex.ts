@@ -220,6 +220,14 @@ export class CodexAgentPlugin extends BaseAgentPlugin {
 
       let stdout = '';
       let stderr = '';
+      let settled = false;
+
+      const safeResolve = (result: { success: boolean; version?: string; error?: string }) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(result);
+      };
 
       proc.stdout?.on('data', (data: Buffer) => {
         stdout += data.toString();
@@ -230,28 +238,28 @@ export class CodexAgentPlugin extends BaseAgentPlugin {
       });
 
       proc.on('error', (error) => {
-        resolve({ success: false, error: `Failed to execute: ${error.message}` });
+        safeResolve({ success: false, error: `Failed to execute: ${error.message}` });
       });
 
       proc.on('close', (code) => {
         if (code === 0) {
           const versionMatch = stdout.match(/(\d+\.\d+\.\d+)/);
           if (!versionMatch?.[1]) {
-            resolve({
+            safeResolve({
               success: false,
               error: `Unable to parse codex version output: ${stdout}`,
             });
             return;
           }
-          resolve({ success: true, version: versionMatch[1] });
+          safeResolve({ success: true, version: versionMatch[1] });
         } else {
-          resolve({ success: false, error: stderr || `Exited with code ${code}` });
+          safeResolve({ success: false, error: stderr || `Exited with code ${code}` });
         }
       });
 
-      setTimeout(() => {
+      const timer = setTimeout(() => {
         proc.kill();
-        resolve({ success: false, error: 'Timeout waiting for --version' });
+        safeResolve({ success: false, error: 'Timeout waiting for --version' });
       }, 5000);
     });
   }
@@ -352,6 +360,42 @@ export class CodexAgentPlugin extends BaseAgentPlugin {
     // Buffer for incomplete JSONL lines split across chunks
     let jsonlBuffer = '';
 
+    // Helper to flush remaining buffer content
+    const flushBuffer = () => {
+      if (!jsonlBuffer) return;
+      const trimmed = jsonlBuffer.trim();
+      if (!trimmed) return;
+
+      // Forward to onJsonlMessage if valid JSON
+      if (options?.onJsonlMessage && trimmed.startsWith('{')) {
+        try {
+          const parsed = JSON.parse(trimmed);
+          options.onJsonlMessage(parsed);
+        } catch {
+          // Not valid JSON, skip
+        }
+      }
+
+      // Process for display events
+      const events = parseCodexOutputToEvents(trimmed);
+      if (events.length > 0) {
+        if (options?.onStdoutSegments) {
+          const segments = processAgentEventsToSegments(events);
+          if (segments.length > 0) {
+            options.onStdoutSegments(segments);
+          }
+        }
+        if (options?.onStdout) {
+          const parsed = processAgentEvents(events);
+          if (parsed.length > 0) {
+            options.onStdout(parsed);
+          }
+        }
+      }
+
+      jsonlBuffer = '';
+    };
+
     // Wrap callbacks to parse JSON events
     const parsedOptions: AgentExecuteOptions = {
       ...options,
@@ -408,6 +452,11 @@ export class CodexAgentPlugin extends BaseAgentPlugin {
             }
           }
         : undefined,
+      // Wrap onEnd to flush buffer before calling original callback
+      onEnd: (result) => {
+        flushBuffer();
+        options?.onEnd?.(result);
+      },
     };
 
     return super.execute(prompt, files, parsedOptions);

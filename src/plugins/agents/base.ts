@@ -99,6 +99,7 @@ interface RunningExecution {
   resolve: (result: AgentExecutionResult) => void;
   reject: (error: Error) => void;
   timeoutId?: ReturnType<typeof setTimeout>;
+  options?: AgentExecuteOptions;
 }
 
 /**
@@ -320,6 +321,7 @@ export abstract class BaseAgentPlugin implements AgentPlugin {
         interrupted: false,
         resolve: resolvePromise!,
         reject: rejectPromise!,
+        options,
       };
 
       this.executions.set(executionId, execution);
@@ -509,6 +511,10 @@ export abstract class BaseAgentPlugin implements AgentPlugin {
     if (this.currentExecutionId === executionId) {
       this.currentExecutionId = undefined;
     }
+
+    // Call onEnd lifecycle hook before resolving
+    // This allows plugins to flush buffers or perform cleanup
+    execution.options?.onEnd?.(result);
 
     // Resolve the promise
     if (process.env.RALPH_DEBUG) {
