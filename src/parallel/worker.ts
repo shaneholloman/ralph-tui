@@ -5,10 +5,10 @@
  * writes to the beads database.
  */
 
-import { ExecutionEngine } from '../engine/index.js';
+import { ExecutionEngine, type WorkerModeOptions } from '../engine/index.js';
 import type { EngineEvent, EngineEventListener } from '../engine/types.js';
 import type { RalphConfig } from '../config/types.js';
-import type { TrackerTask } from '../plugins/trackers/types.js';
+import type { TrackerPlugin, TrackerTask } from '../plugins/trackers/types.js';
 import type {
   WorkerConfig,
   WorkerResult,
@@ -75,8 +75,11 @@ export class Worker {
    * Must be called before start().
    *
    * @param baseConfig - The base RalphConfig to modify for this worktree
+   * @param tracker - Pre-initialized tracker plugin from the parent executor.
+   *   The tracker is injected to avoid re-initializing in the worktree directory
+   *   where tracker data (e.g., .beads/) may not be accessible.
    */
-  async initialize(baseConfig: RalphConfig): Promise<void> {
+  async initialize(baseConfig: RalphConfig, tracker: TrackerPlugin): Promise<void> {
     // Create a worker-specific config pointing to the worktree
     const workerConfig: RalphConfig = {
       ...baseConfig,
@@ -94,7 +97,12 @@ export class Worker {
       this.handleEngineEvent(event);
     });
 
-    await this.engine.initialize();
+    // Initialize in worker mode: inject the tracker and force a single task
+    const workerMode: WorkerModeOptions = {
+      tracker,
+      forcedTask: this.config.task,
+    };
+    await this.engine.initialize(workerMode);
 
     this.emitParallel({
       type: 'worker:created',

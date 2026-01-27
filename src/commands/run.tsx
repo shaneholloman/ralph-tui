@@ -2022,41 +2022,41 @@ export async function executeRunCommand(args: string[]): Promise<void> {
         worktreeDir: storedConfig?.parallel?.worktreeDir,
       });
 
-      // Forward parallel events to headless logger if not using TUI
-      if (!config.showTui) {
-        parallelExecutor.on((event) => {
-          const time = new Date(event.timestamp).toLocaleTimeString();
-          switch (event.type) {
-            case 'parallel:started':
-              console.log(`[${time}] [INFO] [parallel] Parallel execution started: ${event.totalTasks} tasks, ${event.totalGroups} groups, ${event.maxWorkers} workers`);
-              break;
-            case 'parallel:group-started':
-              console.log(`[${time}] [INFO] [parallel] Group ${event.groupIndex + 1}/${event.totalGroups} started: ${event.workerCount} workers`);
-              break;
-            case 'worker:started':
-              console.log(`[${time}] [INFO] [worker] Worker ${event.workerId} started: ${event.task.title}`);
-              break;
-            case 'worker:completed':
-              console.log(`[${time}] [INFO] [worker] Worker ${event.workerId} completed: ${event.result.task.title}`);
-              break;
-            case 'worker:failed':
-              console.log(`[${time}] [ERROR] [worker] Worker ${event.workerId} failed: ${event.error}`);
-              break;
-            case 'merge:completed':
-              console.log(`[${time}] [INFO] [merge] Merge completed: ${event.result.strategy} (${event.result.filesChanged} files)`);
-              break;
-            case 'merge:failed':
-              console.log(`[${time}] [ERROR] [merge] Merge failed: ${event.error}`);
-              break;
-            case 'parallel:completed':
-              console.log(`[${time}] [INFO] [parallel] Parallel execution completed: ${event.totalTasksCompleted} tasks, ${event.totalMergesCompleted} merges, ${event.durationMs}ms`);
-              break;
-            case 'parallel:failed':
-              console.log(`[${time}] [ERROR] [parallel] Parallel execution failed: ${event.error}`);
-              break;
-          }
-        });
-      }
+      // Log parallel events to console.
+      // TUI integration for parallel mode is not yet implemented,
+      // so we always log events regardless of showTui setting.
+      parallelExecutor.on((event) => {
+        const time = new Date(event.timestamp).toLocaleTimeString();
+        switch (event.type) {
+          case 'parallel:started':
+            console.log(`[${time}] [INFO] [parallel] Parallel execution started: ${event.totalTasks} tasks, ${event.totalGroups} groups, ${event.maxWorkers} workers`);
+            break;
+          case 'parallel:group-started':
+            console.log(`[${time}] [INFO] [parallel] Group ${event.groupIndex + 1}/${event.totalGroups} started: ${event.workerCount} workers`);
+            break;
+          case 'worker:started':
+            console.log(`[${time}] [INFO] [worker] Worker ${event.workerId} started: ${event.task.title}`);
+            break;
+          case 'worker:completed':
+            console.log(`[${time}] [INFO] [worker] Worker ${event.workerId} completed: ${event.result.task.title}`);
+            break;
+          case 'worker:failed':
+            console.log(`[${time}] [ERROR] [worker] Worker ${event.workerId} failed: ${event.error}`);
+            break;
+          case 'merge:completed':
+            console.log(`[${time}] [INFO] [merge] Merge completed: ${event.result.strategy} (${event.result.filesChanged} files)`);
+            break;
+          case 'merge:failed':
+            console.log(`[${time}] [ERROR] [merge] Merge failed: ${event.error}`);
+            break;
+          case 'parallel:completed':
+            console.log(`[${time}] [INFO] [parallel] Parallel execution completed: ${event.totalTasksCompleted} tasks, ${event.totalMergesCompleted} merges, ${event.durationMs}ms`);
+            break;
+          case 'parallel:failed':
+            console.log(`[${time}] [ERROR] [parallel] Parallel execution failed: ${event.error}`);
+            break;
+        }
+      });
 
       await parallelExecutor.execute();
     } else if (config.showTui) {

@@ -407,8 +407,8 @@ export class ParallelExecutor {
         }
       });
 
-      // Initialize the worker engine
-      await worker.initialize(this.baseConfig);
+      // Initialize the worker engine with the shared tracker
+      await worker.initialize(this.baseConfig, this.tracker);
       this.activeWorkers.push(worker);
 
       // Mark task as in_progress in the tracker
