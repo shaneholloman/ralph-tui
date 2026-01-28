@@ -288,6 +288,7 @@ async function runWithTui(
   engine: ExecutionEngine,
   cwd: string,
   initialState: PersistedSessionState,
+  initialTasks: any[],
   trackerType?: string,
   currentModel?: string
 ): Promise<PersistedSessionState> {
@@ -350,6 +351,7 @@ async function runWithTui(
     <RunApp
       engine={engine}
       cwd={cwd}
+      initialTasks={initialTasks}
       onQuit={async () => {
         // Save interrupted state
         currentState = { ...currentState, status: 'interrupted' };
@@ -607,11 +609,21 @@ export async function executeResumeCommand(args: string[]): Promise<void> {
   // The engine will start fresh but the session tracks what was already done
   // Task statuses are read from the tracker which should be in sync
 
+  // Load tasks from tracker
+  let tasks: any[] = [];
+  try {
+    const trackerRegistry = getTrackerRegistry();
+    const tracker = await trackerRegistry.getInstance(config.tracker);
+    tasks = await tracker.getTasks({ status: ['open', 'in_progress', 'completed'] });
+  } catch (error) {
+    console.error('Warning: Failed to load tasks:', error);
+  }
+
   // Run with TUI or headless
   let finalState: PersistedSessionState;
   try {
     if (!headless && config.showTui) {
-      finalState = await runWithTui(engine, cwd, resumedState, config.tracker.plugin, config.model);
+      finalState = await runWithTui(engine, cwd, resumedState, tasks, config.tracker.plugin, config.model);
     } else {
       finalState = await runHeadless(engine, cwd, resumedState);
     }
