@@ -136,11 +136,12 @@ describe('process utility', () => {
 
     test('uses custom working directory', async () => {
       const testDir = tmpdir();
+      const escapedTestDir = testDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const result = await runProcess(process.execPath, ['-e', 'console.log(process.cwd())'], {
         cwd: testDir,
       });
       expect(result.success).toBe(true);
-      expect(result.stdout.trim()).toMatch(new RegExp(`^(/private)?${testDir}$`));
+      expect(result.stdout.trim()).toMatch(new RegExp(`^(/private)?${escapedTestDir}$`));
     });
 
     test('uses custom environment variables', async () => {
