@@ -21,7 +21,7 @@ function sanitizeBranchName(taskId: string): string {
   sanitized = sanitized.replace(/[\s~^:?*\[\\@{]/g, '-');
 
   // Remove control characters
-  sanitized = sanitized.replace(/[\x00-\x1f\x7f]/g, '');
+  sanitized = sanitized.replace(/\p{Cc}/gu, '');
 
   // Collapse multiple slashes and dashes
   sanitized = sanitized.replace(/\/+/g, '/').replace(/-+/g, '-');

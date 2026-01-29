@@ -2057,11 +2057,15 @@ export function RunApp({
       if (workerId) {
         const outputLines = parallelWorkerOutputs.get(workerId) ?? [];
         const output = outputLines.join('\n');
+        // Derive isRunning from the worker's actual status instead of hardcoding true.
+        // This ensures completed/failed workers show as no longer running.
+        const worker = parallelWorkers.find((w) => w.id === workerId);
+        const isRunning = worker?.status === 'running';
         return {
           iteration: 1,
           output,
           segments: [{ text: output }],
-          timing: { isRunning: true },
+          timing: { isRunning },
         };
       }
     }

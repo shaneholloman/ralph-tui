@@ -419,23 +419,27 @@ export class ParallelExecutor {
     this.activeWorkers = [];
 
     // Create workers
+    // Track branch names from worktree acquisition for failure result construction
+    const branchNames: string[] = [];
+
     for (let i = 0; i < tasks.length; i++) {
       const task = tasks[i];
       const workerId = `w${this.currentGroupIndex}-${i}`;
-      const branchName = `ralph-parallel/${task.id}`;
 
-      // Acquire worktree
+      // Acquire worktree - use the sanitized branch name returned by acquire()
+      // since acquire() sanitizes task IDs into valid git branch names
       const worktreeInfo = await this.worktreeManager.acquire(
         workerId,
         task.id
       );
+      branchNames.push(worktreeInfo.branch);
 
       const worker = new Worker(
         {
           id: workerId,
           task,
           worktreePath: worktreeInfo.path,
-          branchName,
+          branchName: worktreeInfo.branch,
           cwd: this.config.cwd,
         },
         this.config.maxIterationsPerWorker
@@ -487,7 +491,7 @@ export class ParallelExecutor {
           result.reason instanceof Error
             ? result.reason.message
             : String(result.reason),
-        branchName: `ralph-parallel/${task.id}`,
+        branchName: branchNames[i],
         commitCount: 0,
       };
     });

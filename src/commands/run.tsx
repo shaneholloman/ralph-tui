@@ -1382,6 +1382,13 @@ async function runParallelWithTui(
         break;
 
       case 'worker:started':
+        // Refresh workers from executor state
+        parallelState.workers = parallelExecutor.getWorkerStates();
+        // Mark task as active in persisted session state
+        currentState = addActiveTask(currentState, event.task.id);
+        savePersistedSession(currentState).catch(() => {});
+        break;
+
       case 'worker:progress':
         // Refresh workers from executor state
         parallelState.workers = parallelExecutor.getWorkerStates();
@@ -1398,9 +1405,19 @@ async function runParallelWithTui(
         break;
 
       case 'worker:completed':
+        // Refresh workers from executor state
+        parallelState.workers = parallelExecutor.getWorkerStates();
+        // Remove task from active list in persisted session state
+        currentState = removeActiveTask(currentState, event.result.task.id);
+        savePersistedSession(currentState).catch(() => {});
+        break;
+
       case 'worker:failed':
         // Refresh workers from executor state
         parallelState.workers = parallelExecutor.getWorkerStates();
+        // Remove task from active list in persisted session state
+        currentState = removeActiveTask(currentState, event.task.id);
+        savePersistedSession(currentState).catch(() => {});
         break;
 
       case 'merge:queued':
@@ -1417,6 +1434,9 @@ async function runParallelWithTui(
         parallelState.conflictTaskId = event.taskId;
         // Task title is not on the event — look up from initial tasks
         parallelState.conflictTaskTitle = initialTasks.find((t) => t.id === event.taskId)?.title ?? event.taskId;
+        // Clear prior resolution state so UI reflects only the new conflict
+        parallelState.conflictResolutions = [];
+        parallelState.aiResolving = false;
         break;
 
       case 'conflict:ai-resolving':
@@ -2382,7 +2402,7 @@ export async function executeRunCommand(args: string[]): Promise<void> {
       (t) => t.status === 'open' || t.status === 'in_progress'
     );
 
-    if (actionableTasks.length >= 3) {
+    if (actionableTasks.length >= 2) {
       const analysis = analyzeTaskGraph(actionableTasks);
 
       if (parallelMode === 'always') {
@@ -2430,12 +2450,21 @@ export async function executeRunCommand(args: string[]): Promise<void> {
               break;
             case 'worker:started':
               console.log(`[${time}] [INFO] [worker] Worker ${event.workerId} started: ${event.task.title}`);
+              // Mark task as active in persisted session state
+              persistedState = addActiveTask(persistedState, event.task.id);
+              savePersistedSession(persistedState).catch(() => {});
               break;
             case 'worker:completed':
               console.log(`[${time}] [INFO] [worker] Worker ${event.workerId} completed: ${event.result.task.title}`);
+              // Remove task from active list in persisted session state
+              persistedState = removeActiveTask(persistedState, event.result.task.id);
+              savePersistedSession(persistedState).catch(() => {});
               break;
             case 'worker:failed':
               console.log(`[${time}] [ERROR] [worker] Worker ${event.workerId} failed: ${event.error}`);
+              // Remove task from active list in persisted session state
+              persistedState = removeActiveTask(persistedState, event.task.id);
+              savePersistedSession(persistedState).catch(() => {});
               break;
             case 'merge:completed':
               console.log(`[${time}] [INFO] [merge] Merge completed: ${event.result.strategy} (${event.result.filesChanged} files)`);
