@@ -2571,10 +2571,16 @@ export function RunApp({
           currentEpicId={currentEpicId}
           onCancel={() => setShowEpicLoader(false)}
           onSelect={async (epic) => {
-            if (onEpicSwitch) {
-              await onEpicSwitch(epic);
+            try {
+              if (onEpicSwitch) {
+                await onEpicSwitch(epic);
+              }
+            } catch (err) {
+              setEpicLoaderError(err instanceof Error ? err.message : 'Failed to switch epic');
+              return;
+            } finally {
+              setShowEpicLoader(false);
             }
-            setShowEpicLoader(false);
           }}
         />
       )}
