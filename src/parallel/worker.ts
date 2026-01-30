@@ -88,6 +88,9 @@ export class Worker {
       outputDir: `${this.config.worktreePath}/.ralph-tui/iterations`,
       progressFile: `${this.config.worktreePath}/.ralph-tui/progress.md`,
       sessionId: `${baseConfig.sessionId ?? 'session'}-${this.id}`,
+      // Force auto-commit in parallel mode — required for merge workflow to work.
+      // Without commits, there's nothing to merge back to main.
+      autoCommit: true,
     };
 
     this.engine = new ExecutionEngine(workerConfig);
@@ -150,6 +153,7 @@ export class Worker {
         durationMs: Date.now() - this.startTime,
         branchName: this.config.branchName,
         commitCount: 0, // Will be set by the executor after checking the worktree
+        worktreePath: this.config.worktreePath,
       };
 
       this.emitParallel({
@@ -174,6 +178,7 @@ export class Worker {
         error,
         branchName: this.config.branchName,
         commitCount: 0,
+        worktreePath: this.config.worktreePath,
       };
 
       this.emitParallel({

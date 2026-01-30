@@ -2422,6 +2422,35 @@ export async function executeRunCommand(args: string[]): Promise<void> {
   // Run parallel or sequential execution
   try {
     if (useParallel) {
+      // Check if autoCommit is enabled — required for parallel mode
+      if (!config.autoCommit) {
+        console.log('\n⚠️  Auto-commit is currently disabled.');
+        console.log('Parallel mode requires auto-commit to merge worker changes back to main.\n');
+
+        const { promptSelect } = await import('../setup/prompts.js');
+        const choice = await promptSelect<'enable' | 'sequential' | 'quit'>(
+          'How would you like to proceed?',
+          [
+            { value: 'enable', label: 'Enable auto-commit for this session (recommended)' },
+            { value: 'sequential', label: 'Fall back to sequential mode (no auto-commit)' },
+            { value: 'quit', label: 'Quit' },
+          ]
+        );
+
+        if (choice === 'quit') {
+          process.exit(0);
+        } else if (choice === 'sequential') {
+          console.log('\nSwitching to sequential mode...\n');
+          // Fall through to sequential execution below
+          useParallel = false;
+        } else {
+          // choice === 'enable' — continue with parallel, workers will force autoCommit
+          console.log('\nAuto-commit will be enabled for parallel workers.\n');
+        }
+      }
+    }
+
+    if (useParallel) {
       // Parallel execution path
       const maxWorkers = typeof options.parallel === 'number'
         ? options.parallel

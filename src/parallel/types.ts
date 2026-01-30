@@ -73,6 +73,9 @@ export interface WorkerResult {
 
   /** Number of commits made in the worktree */
   commitCount: number;
+
+  /** Path to the worktree directory (for progress.md merging) */
+  worktreePath?: string;
 }
 
 /**

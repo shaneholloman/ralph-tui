@@ -4,6 +4,8 @@
  * git worktrees, and merges results back sequentially with conflict resolution.
  */
 
+import { readFile, appendFile, access, constants } from 'node:fs/promises';
+import { join } from 'node:path';
 import type { RalphConfig } from '../config/types.js';
 import type { TrackerPlugin, TrackerTask } from '../plugins/trackers/types.js';
 import type { EngineEventListener } from '../engine/types.js';
@@ -356,6 +358,8 @@ export class ParallelExecutor {
             } catch {
               // Log but don't fail after successful merge
             }
+            // Merge worker's progress.md into main so subsequent workers see learnings
+            await this.mergeProgressFile(result);
             groupMergesCompleted++;
             this.totalMergesCompleted++;
           } else if (mergeResult?.hadConflicts) {
@@ -376,6 +380,8 @@ export class ParallelExecutor {
                 } catch {
                   // Log but don't fail after successful resolution
                 }
+                // Merge worker's progress.md into main so subsequent workers see learnings
+                await this.mergeProgressFile(result);
                 this.totalConflictsResolved += resolutions.length;
                 groupMergesCompleted++;
                 this.totalMergesCompleted++;
@@ -550,6 +556,32 @@ export class ParallelExecutor {
       this.mergeEngine.cleanupTags();
     } catch {
       // Best effort cleanup
+    }
+  }
+
+  /**
+   * Merge a worker's progress.md into the main progress.md.
+   * This allows learnings from completed tasks to be visible to subsequent workers.
+   */
+  private async mergeProgressFile(workerResult: WorkerResult): Promise<void> {
+    if (!workerResult.worktreePath) return;
+
+    const workerProgressPath = join(workerResult.worktreePath, '.ralph-tui', 'progress.md');
+    const mainProgressPath = join(this.config.cwd, '.ralph-tui', 'progress.md');
+
+    try {
+      // Check if worker's progress file exists
+      await access(workerProgressPath, constants.R_OK);
+
+      // Read the worker's progress content
+      const workerProgress = await readFile(workerProgressPath, 'utf-8');
+      if (!workerProgress.trim()) return;
+
+      // Append to main progress file with a separator
+      const separator = `\n\n---\n\n## Parallel Task: ${workerResult.task.title} (${workerResult.task.id})\n\n`;
+      await appendFile(mainProgressPath, separator + workerProgress);
+    } catch {
+      // Silently ignore if worker progress file doesn't exist or can't be read
     }
   }
 
