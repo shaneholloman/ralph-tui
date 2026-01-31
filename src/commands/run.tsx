@@ -793,6 +793,8 @@ interface RunAppWrapperProps {
   parallelCompletedLocallyTaskIds?: Set<string>;
   /** Task IDs where auto-commit was skipped (e.g., files were gitignored) */
   parallelAutoCommitSkippedTaskIds?: Set<string>;
+  /** Task IDs that have been successfully merged (shows ✓ done in TUI) */
+  parallelMergedTaskIds?: Set<string>;
   /** Number of currently active (running) workers */
   activeWorkerCount?: number;
   /** Total number of workers */
@@ -845,6 +847,7 @@ function RunAppWrapper({
   parallelTaskIdToWorkerId,
   parallelCompletedLocallyTaskIds,
   parallelAutoCommitSkippedTaskIds,
+  parallelMergedTaskIds,
   activeWorkerCount,
   totalWorkerCount,
   onParallelPause,
@@ -1042,6 +1045,7 @@ function RunAppWrapper({
       parallelTaskIdToWorkerId={parallelTaskIdToWorkerId}
       parallelCompletedLocallyTaskIds={parallelCompletedLocallyTaskIds}
       parallelAutoCommitSkippedTaskIds={parallelAutoCommitSkippedTaskIds}
+      parallelMergedTaskIds={parallelMergedTaskIds}
       activeWorkerCount={activeWorkerCount}
       totalWorkerCount={totalWorkerCount}
       onParallelPause={onParallelPause}
@@ -1360,6 +1364,8 @@ async function runParallelWithTui(
     completedLocallyTaskIds: new Set<string>(),
     /** Task IDs where auto-commit was skipped (e.g., files were gitignored) */
     autoCommitSkippedTaskIds: new Set<string>(),
+    /** Task IDs that have been successfully merged (shows ✓ done in TUI) */
+    mergedTaskIds: new Set<string>(),
   };
 
   // Render trigger — forces React to re-render with updated parallel state.
@@ -1455,6 +1461,11 @@ async function runParallelWithTui(
         const newSet = new Set(parallelState.completedLocallyTaskIds);
         newSet.delete(event.taskId);
         parallelState.completedLocallyTaskIds = newSet;
+        // Add to merged set so TUI shows ✓ done even if worker state was cleared
+        parallelState.mergedTaskIds = new Set([
+          ...parallelState.mergedTaskIds,
+          event.taskId,
+        ]);
         break;
 
       case 'merge:failed':
@@ -1624,6 +1635,7 @@ async function runParallelWithTui(
         parallelTaskIdToWorkerId={parallelState.taskIdToWorkerId}
         parallelCompletedLocallyTaskIds={parallelState.completedLocallyTaskIds}
         parallelAutoCommitSkippedTaskIds={parallelState.autoCommitSkippedTaskIds}
+        parallelMergedTaskIds={parallelState.mergedTaskIds}
         activeWorkerCount={parallelState.workers.filter((w) => w.status === 'running').length}
         totalWorkerCount={parallelState.workers.length}
         onParallelPause={() => parallelExecutor.pause()}

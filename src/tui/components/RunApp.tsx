@@ -182,6 +182,8 @@ export interface RunAppProps {
   parallelCompletedLocallyTaskIds?: Set<string>;
   /** Task IDs where auto-commit was skipped (e.g., files were gitignored) */
   parallelAutoCommitSkippedTaskIds?: Set<string>;
+  /** Task IDs that have been successfully merged (shows ✓ done in TUI) */
+  parallelMergedTaskIds?: Set<string>;
   /** Number of currently active (running) workers */
   activeWorkerCount?: number;
   /** Total number of workers */
@@ -446,6 +448,7 @@ export function RunApp({
   parallelTaskIdToWorkerId,
   parallelCompletedLocallyTaskIds,
   parallelAutoCommitSkippedTaskIds: _parallelAutoCommitSkippedTaskIds, // Reserved for future status bar warning
+  parallelMergedTaskIds,
   activeWorkerCount,
   totalWorkerCount,
   onParallelPause,
@@ -899,13 +902,24 @@ export function RunApp({
       });
     }
 
+    // Mark tasks as done if they've been successfully merged
+    // This ensures tasks show ✓ even after worker states are cleared or parallel execution ends
+    if (isParallelMode && parallelMergedTaskIds?.size) {
+      sourceTasks = sourceTasks.map((task) => {
+        if (parallelMergedTaskIds.has(task.id) && task.status !== 'done') {
+          return { ...task, status: 'done' as TaskStatus };
+        }
+        return task;
+      });
+    }
+
     const filtered = showClosedTasks ? sourceTasks : sourceTasks.filter((t) => t.status !== 'closed');
     return [...filtered].sort((a, b) => {
       const priorityA = statusPriority[a.status] ?? 10;
       const priorityB = statusPriority[b.status] ?? 10;
       return priorityA - priorityB;
     });
-  }, [tasks, remoteTasks, isViewingRemote, showClosedTasks, isParallelMode, parallelWorkers, parallelCompletedLocallyTaskIds]);
+  }, [tasks, remoteTasks, isViewingRemote, showClosedTasks, isParallelMode, parallelWorkers, parallelCompletedLocallyTaskIds, parallelMergedTaskIds]);
 
   // Clamp selectedIndex when displayedTasks shrinks (e.g., when hiding closed tasks)
   useEffect(() => {
