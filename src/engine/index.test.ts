@@ -232,4 +232,185 @@ describe('ExecutionEngine', () => {
       expect(result).toEqual([]);
     });
   });
+
+  describe('filteredTaskIds config', () => {
+    test('accepts filteredTaskIds in config', () => {
+      const config = createMockConfig();
+      config.filteredTaskIds = ['task-1', 'task-2'];
+
+      const engine = new ExecutionEngine(config);
+
+      // Engine should be created successfully with filteredTaskIds
+      expect(engine).toBeInstanceOf(ExecutionEngine);
+    });
+
+    test('accepts empty filteredTaskIds array', () => {
+      const config = createMockConfig();
+      config.filteredTaskIds = [];
+
+      const engine = new ExecutionEngine(config);
+
+      expect(engine).toBeInstanceOf(ExecutionEngine);
+    });
+
+    test('accepts undefined filteredTaskIds', () => {
+      const config = createMockConfig();
+      config.filteredTaskIds = undefined;
+
+      const engine = new ExecutionEngine(config);
+
+      expect(engine).toBeInstanceOf(ExecutionEngine);
+    });
+
+    test('getNextAvailableTask respects filteredTaskIds filter', async () => {
+      // Create tasks
+      const tasks = [
+        createMockTask({ id: 'task-1', status: 'open', title: 'Task 1' }),
+        createMockTask({ id: 'task-2', status: 'open', title: 'Task 2' }),
+        createMockTask({ id: 'task-3', status: 'open', title: 'Task 3' }),
+      ];
+
+      // Mock tracker that returns the first open task
+      const mockTracker: Partial<TrackerPlugin> = {
+        meta: {
+          id: 'mock',
+          name: 'Mock Tracker',
+          description: 'Mock tracker for testing',
+          version: '1.0.0',
+          supportsBidirectionalSync: false,
+          supportsHierarchy: false,
+          supportsDependencies: false,
+        },
+        getTasks: async () => tasks,
+        // Return task-2 as the next task (which is NOT in our filtered list)
+        getNextTask: async () => tasks[1], // task-2
+        getTemplate: () => `Task: {{taskId}}`,
+        getPrdContext: async () => null,
+      };
+
+      // Only allow task-1 and task-3 (NOT task-2)
+      const config = createMockConfig();
+      config.filteredTaskIds = ['task-1', 'task-3'];
+
+      const engine = new ExecutionEngine(config);
+      (engine as unknown as { tracker: TrackerPlugin }).tracker = mockTracker as TrackerPlugin;
+
+      // Access private method via type casting
+      const getNextTask = (engine as unknown as { getNextAvailableTask: () => Promise<TrackerTask | null> })
+        .getNextAvailableTask.bind(engine);
+
+      const result = await getNextTask();
+
+      // task-2 should be filtered out since it's not in filteredTaskIds
+      expect(result).toBeNull();
+    });
+
+    test('getNextAvailableTask returns task when in filteredTaskIds', async () => {
+      const tasks = [
+        createMockTask({ id: 'task-1', status: 'open', title: 'Task 1' }),
+        createMockTask({ id: 'task-2', status: 'open', title: 'Task 2' }),
+      ];
+
+      const mockTracker: Partial<TrackerPlugin> = {
+        meta: {
+          id: 'mock',
+          name: 'Mock Tracker',
+          description: 'Mock tracker for testing',
+          version: '1.0.0',
+          supportsBidirectionalSync: false,
+          supportsHierarchy: false,
+          supportsDependencies: false,
+        },
+        getTasks: async () => tasks,
+        getNextTask: async () => tasks[0], // Returns task-1
+        getTemplate: () => `Task: {{taskId}}`,
+        getPrdContext: async () => null,
+      };
+
+      // Allow task-1 (which is the one returned by getNextTask)
+      const config = createMockConfig();
+      config.filteredTaskIds = ['task-1', 'task-2'];
+
+      const engine = new ExecutionEngine(config);
+      (engine as unknown as { tracker: TrackerPlugin }).tracker = mockTracker as TrackerPlugin;
+
+      const getNextTask = (engine as unknown as { getNextAvailableTask: () => Promise<TrackerTask | null> })
+        .getNextAvailableTask.bind(engine);
+
+      const result = await getNextTask();
+
+      // task-1 should be returned since it's in filteredTaskIds
+      expect(result).not.toBeNull();
+      expect(result?.id).toBe('task-1');
+    });
+
+    test('getNextAvailableTask returns task when filteredTaskIds is empty', async () => {
+      const tasks = [createMockTask({ id: 'task-1', status: 'open', title: 'Task 1' })];
+
+      const mockTracker: Partial<TrackerPlugin> = {
+        meta: {
+          id: 'mock',
+          name: 'Mock Tracker',
+          description: 'Mock tracker for testing',
+          version: '1.0.0',
+          supportsBidirectionalSync: false,
+          supportsHierarchy: false,
+          supportsDependencies: false,
+        },
+        getTasks: async () => tasks,
+        getNextTask: async () => tasks[0],
+        getTemplate: () => `Task: {{taskId}}`,
+        getPrdContext: async () => null,
+      };
+
+      // Empty filteredTaskIds should not filter anything
+      const config = createMockConfig();
+      config.filteredTaskIds = [];
+
+      const engine = new ExecutionEngine(config);
+      (engine as unknown as { tracker: TrackerPlugin }).tracker = mockTracker as TrackerPlugin;
+
+      const getNextTask = (engine as unknown as { getNextAvailableTask: () => Promise<TrackerTask | null> })
+        .getNextAvailableTask.bind(engine);
+
+      const result = await getNextTask();
+
+      expect(result).not.toBeNull();
+      expect(result?.id).toBe('task-1');
+    });
+
+    test('getNextAvailableTask returns task when filteredTaskIds is undefined', async () => {
+      const tasks = [createMockTask({ id: 'task-1', status: 'open', title: 'Task 1' })];
+
+      const mockTracker: Partial<TrackerPlugin> = {
+        meta: {
+          id: 'mock',
+          name: 'Mock Tracker',
+          description: 'Mock tracker for testing',
+          version: '1.0.0',
+          supportsBidirectionalSync: false,
+          supportsHierarchy: false,
+          supportsDependencies: false,
+        },
+        getTasks: async () => tasks,
+        getNextTask: async () => tasks[0],
+        getTemplate: () => `Task: {{taskId}}`,
+        getPrdContext: async () => null,
+      };
+
+      // No filteredTaskIds set
+      const config = createMockConfig();
+
+      const engine = new ExecutionEngine(config);
+      (engine as unknown as { tracker: TrackerPlugin }).tracker = mockTracker as TrackerPlugin;
+
+      const getNextTask = (engine as unknown as { getNextAvailableTask: () => Promise<TrackerTask | null> })
+        .getNextAvailableTask.bind(engine);
+
+      const result = await getNextTask();
+
+      expect(result).not.toBeNull();
+      expect(result?.id).toBe('task-1');
+    });
+  });
 });
