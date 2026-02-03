@@ -1335,19 +1335,26 @@ export class RemoteServer {
 
     try {
       // Fetch tasks from tracker
-      const tasks = await this.options.tracker.getTasks({ status: ['open', 'in_progress'] });
+      let tasks = await this.options.tracker.getTasks({ status: ['open', 'in_progress'] });
+
+      // Apply filteredTaskIds filter if specified in baseConfig
+      const filteredTaskIds = this.options.baseConfig.filteredTaskIds;
+      if (filteredTaskIds && filteredTaskIds.length > 0) {
+        const allowedIds = new Set(filteredTaskIds);
+        tasks = tasks.filter((t) => allowedIds.has(t.id));
+      }
 
       if (tasks.length === 0) {
         const response = createMessage<OrchestrateStartResponseMessage>('orchestrate:start_response', {
           success: false,
-          error: 'No actionable tasks found',
+          error: filteredTaskIds?.length ? 'No tasks match the specified filter' : 'No actionable tasks found',
         });
         response.id = message.id;
         this.send(ws, response);
         return;
       }
 
-      // Analyze task graph
+      // Analyze task graph (using filtered tasks)
       const analysis = analyzeTaskGraph(tasks);
 
       if (!shouldRunParallel(analysis)) {
@@ -1376,6 +1383,7 @@ export class RemoteServer {
       }
 
       // Create ParallelExecutor with validated options
+      // Pass filteredTaskIds so executor only schedules those tasks
       const executor = new ParallelExecutor(
         this.options.baseConfig,
         this.options.tracker,
@@ -1383,6 +1391,7 @@ export class RemoteServer {
           maxWorkers,
           directMerge: message.directMerge ?? false,
           maxIterationsPerWorker: message.maxIterations ?? this.options.baseConfig.maxIterations,
+          filteredTaskIds: filteredTaskIds?.length ? filteredTaskIds : undefined,
         }
       );
 
