@@ -136,4 +136,79 @@ describe('Worker', () => {
       expect(worker.getStatus()).toBe('cancelled');
     });
   });
+
+  describe('pause without initialize', () => {
+    test('does not throw when called without engine', () => {
+      const worker = new Worker(workerConfig('w1', mockTask('T1')), 10);
+
+      // Should not throw
+      worker.pause();
+
+      expect(worker.getStatus()).toBe('idle');
+    });
+  });
+
+  describe('resume without initialize', () => {
+    test('does not throw when called without engine', () => {
+      const worker = new Worker(workerConfig('w1', mockTask('T1')), 10);
+
+      // Should not throw
+      worker.resume();
+
+      expect(worker.getStatus()).toBe('idle');
+    });
+  });
+
+  describe('display state with worktree info', () => {
+    test('includes worktreePath from config', () => {
+      const task = mockTask('T1');
+      const cfg = workerConfig('w1', task);
+      const worker = new Worker(cfg, 10);
+
+      const state = worker.getDisplayState();
+
+      expect(state.worktreePath).toBe('/tmp/worktrees/w1');
+    });
+
+    test('includes branchName from config', () => {
+      const task = mockTask('T1');
+      const cfg = workerConfig('w1', task);
+      const worker = new Worker(cfg, 10);
+
+      const state = worker.getDisplayState();
+
+      expect(state.branchName).toBe('ralph-parallel/T1');
+    });
+
+    test('commitSha is undefined initially', () => {
+      const task = mockTask('T1');
+      const worker = new Worker(workerConfig('w1', task), 10);
+
+      const state = worker.getDisplayState();
+
+      expect(state.commitSha).toBeUndefined();
+    });
+  });
+
+  describe('listener error handling', () => {
+    test('unsubscribing from parallel events multiple times is safe', () => {
+      const worker = new Worker(workerConfig('w1', mockTask('T1')), 10);
+      const unsub = worker.on(() => {});
+
+      // Multiple unsubscribes should not throw
+      unsub();
+      unsub();
+      unsub();
+    });
+
+    test('unsubscribing from engine events multiple times is safe', () => {
+      const worker = new Worker(workerConfig('w1', mockTask('T1')), 10);
+      const unsub = worker.onEngineEvent(() => {});
+
+      // Multiple unsubscribes should not throw
+      unsub();
+      unsub();
+      unsub();
+    });
+  });
 });

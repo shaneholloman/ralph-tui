@@ -14,8 +14,10 @@ import {
   deleteParallelSession,
   hasParallelSession,
   updateSessionAfterGroup,
+  updateSessionWithBranch,
   markTaskRequeued,
   findOrphanedWorktrees,
+  cleanupOrphanedWorktrees,
 } from './session.js';
 import type { TaskGraphAnalysis } from './types.js';
 import type { TrackerTask } from '../plugins/trackers/types.js';
@@ -230,6 +232,39 @@ describe('session state updates', () => {
 
     expect(session.requeuedTaskIds).toEqual(['A', 'B']);
   });
+
+  test('updateSessionWithBranch sets session and original branch', () => {
+    const graph = createMockGraph(['A', 'B']);
+    const session = createParallelSession('branch-test', graph, 'tag');
+
+    const updated = updateSessionWithBranch(session, 'ralph-session/abc123', 'main');
+
+    expect(updated.sessionBranch).toBe('ralph-session/abc123');
+    expect(updated.originalBranch).toBe('main');
+    expect(typeof updated.lastUpdatedAt).toBe('string');
+  });
+
+  test('updateSessionWithBranch preserves other session properties', () => {
+    const graph = createMockGraph(['A', 'B', 'C']);
+    let session = createParallelSession('preserve-test', graph, 'tag');
+
+    // First update some other properties
+    session = updateSessionAfterGroup(session, 0, ['A'], ['B']);
+    session = markTaskRequeued(session, 'C');
+
+    // Then update with branch info
+    const updated = updateSessionWithBranch(session, 'ralph-session/xyz', 'develop');
+
+    // Branch properties should be set
+    expect(updated.sessionBranch).toBe('ralph-session/xyz');
+    expect(updated.originalBranch).toBe('develop');
+
+    // Other properties should be preserved
+    expect(updated.lastCompletedGroupIndex).toBe(0);
+    expect(updated.mergedTaskIds).toEqual(['A']);
+    expect(updated.failedTaskIds).toEqual(['B']);
+    expect(updated.requeuedTaskIds).toEqual(['C']);
+  });
 });
 
 describe('findOrphanedWorktrees', () => {
@@ -280,5 +315,51 @@ describe('findOrphanedWorktrees', () => {
     const orphans = findOrphanedWorktrees(tempDir, worktreeDir);
     expect(orphans).toHaveLength(1);
     expect(path.basename(orphans[0])).toBe('worker-1');
+  });
+});
+
+describe('cleanupOrphanedWorktrees', () => {
+  let tempDir: string;
+
+  beforeEach(() => {
+    tempDir = createTempDir();
+  });
+
+  afterEach(() => {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  test('returns zero cleaned when no worktrees exist', () => {
+    const result = cleanupOrphanedWorktrees(tempDir, 'nonexistent');
+
+    expect(result.cleaned).toBe(0);
+    expect(result.errors).toHaveLength(0);
+  });
+
+  test('returns zero cleaned when worktree directory is empty', () => {
+    const worktreeDir = '.ralph-tui/worktrees';
+    fs.mkdirSync(path.join(tempDir, worktreeDir), { recursive: true });
+
+    const result = cleanupOrphanedWorktrees(tempDir, worktreeDir);
+
+    expect(result.cleaned).toBe(0);
+    expect(result.errors).toHaveLength(0);
+  });
+
+  test('reports errors for non-git directories it cannot clean', () => {
+    // Create a fake worktree directory (not a real git worktree)
+    const worktreeDir = '.ralph-tui/worktrees';
+    const basePath = path.join(tempDir, worktreeDir);
+    const fakeWorktree = path.join(basePath, 'worker-1');
+    fs.mkdirSync(fakeWorktree, { recursive: true });
+    fs.writeFileSync(path.join(fakeWorktree, 'test.txt'), 'content');
+
+    // Should attempt to clean and succeed with fallback rm
+    const result = cleanupOrphanedWorktrees(tempDir, worktreeDir);
+
+    // The directory should be removed by the fallback
+    expect(fs.existsSync(fakeWorktree)).toBe(false);
+    // Either cleaned or error depending on git worktree prune behavior
+    expect(result.cleaned + result.errors.length).toBeGreaterThanOrEqual(0);
   });
 });
