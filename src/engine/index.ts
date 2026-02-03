@@ -1057,8 +1057,11 @@ export class ExecutionEngine {
       const promiseComplete = PROMISE_COMPLETE_PATTERN.test(agentResult.stdout);
 
       // Determine if task was completed
-      const taskCompleted =
-        promiseComplete || agentResult.status === 'completed';
+      // IMPORTANT: Only use the explicit <promise>COMPLETE</promise> signal.
+      // Exit code 0 alone does NOT indicate task completion - an agent may exit
+      // cleanly after asking clarification questions or hitting a blocker.
+      // See: https://github.com/subsy/ralph-tui/issues/259
+      const taskCompleted = promiseComplete;
 
       // Update tracker if task completed
       if (taskCompleted) {
