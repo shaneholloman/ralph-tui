@@ -1,16 +1,18 @@
 /**
  * ABOUTME: File browser component for navigating directories and selecting files.
  * Provides keyboard-driven navigation through the filesystem to find and select files.
+ * Includes fuzzy search for quick file filtering within the current directory.
  */
 
 import type { ReactNode } from 'react';
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useKeyboard } from '@opentui/react';
 import type { ScrollBoxRenderable } from '@opentui/core';
 import { homedir } from 'node:os';
 import { dirname, resolve, sep, isAbsolute } from 'node:path';
 import { colors } from '../theme.js';
 import { listDirectory, isDirectory, pathExists, type DirectoryEntry } from '../../utils/files.js';
+import { fuzzySearch } from '../../utils/fuzzy-search.js';
 
 /**
  * Props for the FileBrowser component
@@ -88,10 +90,29 @@ export function FileBrowser({
   const [showHidden, setShowHidden] = useState(false);
   const [editingPath, setEditingPath] = useState(false);
   const [editedPath, setEditedPath] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
   const scrollboxRef = useRef<ScrollBoxRenderable>(null);
 
   // Combine internal error with external errorMessage
   const displayError = error || errorMessage || null;
+
+  // Filter entries using fuzzy search when there's a search query
+  const filteredEntries = useMemo(() => {
+    if (!searchQuery) {
+      return entries;
+    }
+    // Extract entry names for fuzzy matching
+    const entryNames = entries.map((e) => e.name);
+    const matches = fuzzySearch(entryNames, searchQuery, entries.length);
+    // Map back to DirectoryEntry objects preserving fuzzy match order
+    const matchedNames = new Set(matches.map((m) => m.item));
+    return entries.filter((e) => matchedNames.has(e.name)).sort((a, b) => {
+      // Sort by fuzzy score order
+      const aIndex = matches.findIndex((m) => m.item === a.name);
+      const bIndex = matches.findIndex((m) => m.item === b.name);
+      return aIndex - bIndex;
+    });
+  }, [entries, searchQuery]);
 
   // Load directory contents when path or showHidden changes
   useEffect(() => {
@@ -128,15 +149,24 @@ export function FileBrowser({
       setShowHidden(false);
       setEditingPath(false);
       setEditedPath('');
+      setSearchQuery('');
     }
   }, [visible, initialPath]);
+
+  // Clear search when changing directories
+  useEffect(() => {
+    setSearchQuery('');
+    setSelectedIndex(0);
+  }, [currentPath]);
 
   // Scroll to keep selected item in view (only when it goes out of the visible area)
   useEffect(() => {
     if (scrollboxRef.current && !loading && !displayError) {
       const itemHeight = 1;
       const visibleRows = 10;
-      const itemTop = selectedIndex * itemHeight;
+      // Account for ".." entry only when not searching (search mode hides "..")
+      const adjustedIndex = searchQuery ? selectedIndex : selectedIndex;
+      const itemTop = adjustedIndex * itemHeight;
       const itemBottom = itemTop + itemHeight;
       const scrollTop = scrollboxRef.current.scrollTop;
       const scrollBottom = scrollTop + visibleRows;
@@ -149,7 +179,7 @@ export function FileBrowser({
         scrollboxRef.current.scrollTop = itemTop;
       }
     }
-  }, [selectedIndex, loading, displayError]);
+  }, [selectedIndex, loading, displayError, searchQuery]);
 
   // Navigate to parent directory
   const goToParent = useCallback(() => {
@@ -219,9 +249,11 @@ export function FileBrowser({
   }, []);
 
   // Enter directory or select file
-  // Note: selectedIndex 0 is "..", so actual entries start at index 1
+  // Note: In normal mode selectedIndex 0 is "..", so actual entries start at index 1
+  // In search mode there's no "..", so entries start at index 0
   const enterOrSelect = useCallback(() => {
-    const entry = entries[selectedIndex - 1];
+    const entryIndex = searchQuery ? selectedIndex : selectedIndex - 1;
+    const entry = filteredEntries[entryIndex];
     if (!entry) return;
 
     if (entry.isDirectory) {
@@ -229,7 +261,13 @@ export function FileBrowser({
     } else {
       onSelect(entry.path);
     }
-  }, [entries, selectedIndex, onSelect]);
+  }, [filteredEntries, selectedIndex, onSelect, searchQuery]);
+
+  // Clear search query
+  const clearSearch = useCallback(() => {
+    setSearchQuery('');
+    setSelectedIndex(0);
+  }, []);
 
   // Handle keyboard input
   const handleKeyboard = useCallback(
@@ -263,51 +301,103 @@ export function FileBrowser({
         return;
       }
 
-      // Normal navigation mode
+      // Calculate max index based on search mode
+      // In search mode: no ".." entry, so max is filteredEntries.length - 1
+      // In normal mode: ".." is index 0, entries are 1..entries.length
+      const maxIndex = searchQuery ? filteredEntries.length - 1 : filteredEntries.length;
+
+      // Navigation and search mode
       switch (key.name) {
         case 'escape':
-          onCancel();
+          // If searching, clear search first; otherwise cancel browser
+          if (searchQuery) {
+            clearSearch();
+          } else {
+            onCancel();
+          }
           break;
 
         case 'up':
-        case 'k':
           setSelectedIndex((prev) => Math.max(0, prev - 1));
           break;
 
         case 'down':
-        case 'j':
-          setSelectedIndex((prev) => Math.min(entries.length, prev + 1));
+          setSelectedIndex((prev) => Math.min(maxIndex, prev + 1));
           break;
 
         case 'return':
         case 'enter':
-        case 'right':
-        case 'l':
-          if (selectedIndex === 0) {
+          // In search mode, directly select from filtered entries
+          if (searchQuery) {
+            enterOrSelect();
+          } else if (selectedIndex === 0) {
             goToParent();
           } else {
             enterOrSelect();
           }
           break;
 
-        case 'backspace':
+        case 'right':
+          // In search mode, enter directory or select file
+          if (searchQuery) {
+            enterOrSelect();
+          } else if (selectedIndex === 0) {
+            goToParent();
+          } else {
+            enterOrSelect();
+          }
+          break;
+
+        case 'tab':
+          // Tab selects the highlighted entry (convenient keyboard shortcut)
+          if (searchQuery && filteredEntries.length > 0) {
+            enterOrSelect();
+          } else if (!searchQuery && selectedIndex > 0) {
+            enterOrSelect();
+          }
+          break;
+
         case 'left':
-        case 'h':
-          goToParent();
+          // Clear search first, then go to parent
+          if (searchQuery) {
+            clearSearch();
+          } else {
+            goToParent();
+          }
+          break;
+
+        case 'backspace':
+          // In search mode, delete characters; otherwise go to parent
+          if (searchQuery) {
+            setSearchQuery((prev) => {
+              const newQuery = prev.slice(0, -1);
+              if (!newQuery) {
+                setSelectedIndex(0);
+              }
+              return newQuery;
+            });
+          } else {
+            goToParent();
+          }
           break;
 
         default:
-          if (key.sequence === '~') {
+          // Handle special keys and search input
+          if (key.sequence === '~' && !searchQuery) {
             goToHome();
-          } else if (key.sequence === '.') {
+          } else if (key.sequence === '.' && !searchQuery) {
             setShowHidden((prev) => !prev);
-          } else if (key.sequence === '/' || key.sequence === 'g') {
+          } else if ((key.sequence === '/' || key.sequence === 'g') && !searchQuery) {
             startEditingPath();
+          } else if (key.sequence && key.sequence.length === 1 && /[a-zA-Z0-9_\-.]/.test(key.sequence)) {
+            // Start or continue fuzzy search with alphanumeric input
+            setSearchQuery((prev) => prev + key.sequence);
+            setSelectedIndex(0);
           }
           break;
       }
     },
-    [visible, editingPath, editedPath, entries.length, selectedIndex, onCancel, goToParent, goToHome, enterOrSelect, cancelEditingPath, navigateToPath, startEditingPath]
+    [visible, editingPath, editedPath, filteredEntries.length, selectedIndex, searchQuery, onCancel, goToParent, goToHome, enterOrSelect, cancelEditingPath, navigateToPath, startEditingPath, clearSearch]
   );
 
   useKeyboard(handleKeyboard);
@@ -359,14 +449,14 @@ export function FileBrowser({
           <text fg={colors.fg.muted}>[{trackerLabel ?? displayExtension}]</text>
         </box>
 
-        {/* Path breadcrumb / editor */}
+        {/* Path breadcrumb / editor / search */}
         <box
           style={{
             width: '100%',
             height: 1,
             paddingLeft: 1,
             paddingRight: 1,
-            backgroundColor: editingPath ? colors.bg.highlight : colors.bg.primary,
+            backgroundColor: editingPath || searchQuery ? colors.bg.highlight : colors.bg.primary,
           }}
         >
           {editingPath ? (
@@ -374,6 +464,13 @@ export function FileBrowser({
               <text fg={colors.accent.primary}>→ </text>
               <text fg={colors.fg.primary}>{editedPath}</text>
               <text fg={colors.accent.primary}>_</text>
+            </>
+          ) : searchQuery ? (
+            <>
+              <text fg={colors.accent.secondary}>🔍 </text>
+              <text fg={colors.fg.primary}>{searchQuery}</text>
+              <text fg={colors.accent.primary}>_</text>
+              <text fg={colors.fg.muted}> ({filteredEntries.length} match{filteredEntries.length !== 1 ? 'es' : ''})</text>
             </>
           ) : (
             <text fg={colors.fg.secondary}>{truncateText(formatPath(currentPath), 66)}</text>
@@ -427,25 +524,29 @@ export function FileBrowser({
             }}
           >
             <scrollbox ref={scrollboxRef} style={{ flexGrow: 1 }}>
-              {/* Parent directory entry */}
-              <box
-                style={{
-                  width: '100%',
-                  height: 1,
-                  flexDirection: 'row',
-                  backgroundColor: selectedIndex === 0 ? colors.bg.highlight : 'transparent',
-                }}
-              >
-                <text fg={selectedIndex === 0 ? colors.accent.primary : 'transparent'}>
-                  {selectedIndex === 0 ? '▸ ' : '  '}
-                </text>
-                <text fg={colors.accent.tertiary}>📁 </text>
-                <text fg={selectedIndex === 0 ? colors.fg.primary : colors.fg.secondary}>..</text>
-              </box>
+              {/* Parent directory entry (hidden during search) */}
+              {!searchQuery && (
+                <box
+                  style={{
+                    width: '100%',
+                    height: 1,
+                    flexDirection: 'row',
+                    backgroundColor: selectedIndex === 0 ? colors.bg.highlight : 'transparent',
+                  }}
+                >
+                  <text fg={selectedIndex === 0 ? colors.accent.primary : 'transparent'}>
+                    {selectedIndex === 0 ? '▸ ' : '  '}
+                  </text>
+                  <text fg={colors.accent.tertiary}>📁 </text>
+                  <text fg={selectedIndex === 0 ? colors.fg.primary : colors.fg.secondary}>..</text>
+                </box>
+              )}
 
-              {/* Directory entries */}
-              {entries.map((entry, index) => {
-                const displayIndex = index + 1;
+              {/* Directory entries (filtered when searching) */}
+              {filteredEntries.map((entry, index) => {
+                // In search mode: index directly maps to selectedIndex
+                // In normal mode: offset by 1 for ".." entry
+                const displayIndex = searchQuery ? index : index + 1;
                 const isSelected = displayIndex === selectedIndex;
                 const icon = entry.isDirectory ? '📁' : '📄';
                 const textColor = entry.isDirectory ? colors.accent.tertiary : colors.fg.primary;
@@ -470,6 +571,13 @@ export function FileBrowser({
                   </box>
                 );
               })}
+
+              {/* Empty search results message */}
+              {searchQuery && filteredEntries.length === 0 && (
+                <box style={{ width: '100%', height: 1, paddingLeft: 2 }}>
+                  <text fg={colors.fg.muted}>No matches for "{searchQuery}"</text>
+                </box>
+              )}
             </scrollbox>
           </box>
         )}
@@ -495,6 +603,21 @@ export function FileBrowser({
                 <span fg={colors.accent.primary}>Esc</span> Cancel
               </text>
             </>
+          ) : searchQuery ? (
+            <>
+              <text fg={colors.fg.muted}>
+                <span fg={colors.accent.primary}>Enter</span> Select
+              </text>
+              <text fg={colors.fg.muted}>
+                <span fg={colors.accent.primary}>↑↓</span> Nav
+              </text>
+              <text fg={colors.fg.muted}>
+                <span fg={colors.accent.primary}>⌫</span> Delete
+              </text>
+              <text fg={colors.fg.muted}>
+                <span fg={colors.accent.primary}>Esc</span> Clear
+              </text>
+            </>
           ) : (
             <>
               <text fg={colors.fg.muted}>
@@ -504,13 +627,13 @@ export function FileBrowser({
                 <span fg={colors.accent.primary}>↑↓</span> Nav
               </text>
               <text fg={colors.fg.muted}>
+                <span fg={colors.accent.primary}>abc</span> Search
+              </text>
+              <text fg={colors.fg.muted}>
                 <span fg={colors.accent.primary}>/</span> Path
               </text>
               <text fg={colors.fg.muted}>
-                <span fg={colors.accent.primary}>~</span> Home
-              </text>
-              <text fg={colors.fg.muted}>
-                <span fg={colors.accent.primary}>.</span> Hidden{showHidden ? '✓' : ''}
+                <span fg={colors.accent.primary}>~.</span> Home/Hidden{showHidden ? '✓' : ''}
               </text>
               <text fg={colors.fg.muted}>
                 <span fg={colors.accent.primary}>Esc</span> ✗
