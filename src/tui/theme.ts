@@ -414,12 +414,13 @@ function getThemesDir(): string {
   const currentDir = dirname(currentFile);
 
   // In dev: src/tui/theme.ts -> ../../assets/themes
-  // In dist: dist/tui/theme.js -> ../assets/themes (copied during build)
+  // In dist: dist/cli.js -> assets/themes (copied during build to dist/assets/)
+  // Note: bun bundler produces flat output (dist/cli.js), not nested (dist/tui/theme.js)
   // Use path-segment-aware check for cross-platform compatibility (Windows uses backslashes)
   const pathSegments = currentDir.split(sep);
   const isInDist = pathSegments.includes('dist');
   if (isInDist) {
-    return join(currentDir, '..', 'assets', 'themes');
+    return join(currentDir, 'assets', 'themes');
   }
   // Development: src/tui directory
   return join(currentDir, '..', '..', 'assets', 'themes');
