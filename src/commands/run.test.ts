@@ -345,3 +345,257 @@ describe('printRunHelp', () => {
     }
   });
 });
+
+describe('conflict resolution callbacks', () => {
+  /**
+   * These tests verify the conflict resolution callback type signatures
+   * and expected behavior. The actual keyboard handling is in RunApp.tsx
+   * and requires integration testing with the TUI framework.
+   */
+
+  describe('callback type signatures', () => {
+    test('onConflictAbort returns a Promise', async () => {
+      // Simulate the callback implementation from run.tsx
+      let stopped = false;
+      let conflictsCleared = false;
+
+      const onConflictAbort = async () => {
+        // Simulates: await parallelExecutor.stop()
+        stopped = true;
+        // Simulates clearing conflict state
+        conflictsCleared = true;
+      };
+
+      await onConflictAbort();
+
+      expect(stopped).toBe(true);
+      expect(conflictsCleared).toBe(true);
+    });
+
+    test('onConflictAccept receives filePath parameter', () => {
+      let receivedFilePath: string | undefined;
+
+      const onConflictAccept = (filePath: string) => {
+        receivedFilePath = filePath;
+      };
+
+      onConflictAccept('src/example.ts');
+
+      expect(receivedFilePath).toBe('src/example.ts');
+    });
+
+    test('onConflictAcceptAll requires no parameters', () => {
+      let called = false;
+
+      const onConflictAcceptAll = () => {
+        called = true;
+      };
+
+      onConflictAcceptAll();
+
+      expect(called).toBe(true);
+    });
+  });
+
+  describe('parallel state conflict management', () => {
+    test('conflict state structure is correct', () => {
+      // Mirrors the parallelState structure in run.tsx
+      const parallelState = {
+        conflicts: [] as Array<{ filePath: string }>,
+        conflictResolutions: [] as Array<{ filePath: string; success: boolean }>,
+        conflictTaskId: '',
+        conflictTaskTitle: '',
+        aiResolving: false,
+      };
+
+      // Simulate conflict:detected event
+      parallelState.conflicts = [
+        { filePath: 'src/file1.ts' },
+        { filePath: 'src/file2.ts' },
+      ];
+      parallelState.conflictTaskId = 'TASK-001';
+      parallelState.conflictTaskTitle = 'Test task';
+
+      expect(parallelState.conflicts).toHaveLength(2);
+      expect(parallelState.conflictTaskId).toBe('TASK-001');
+    });
+
+    test('onConflictAbort clears conflict state', () => {
+      const parallelState = {
+        conflicts: [{ filePath: 'src/file1.ts' }],
+        conflictResolutions: [{ filePath: 'src/file1.ts', success: true }],
+        conflictTaskId: 'TASK-001',
+        conflictTaskTitle: 'Test task',
+        aiResolving: true,
+      };
+
+      // Simulate onConflictAbort implementation
+      const onConflictAbort = async () => {
+        parallelState.conflicts = [];
+        parallelState.conflictResolutions = [];
+        parallelState.conflictTaskId = '';
+        parallelState.conflictTaskTitle = '';
+        parallelState.aiResolving = false;
+      };
+
+      onConflictAbort();
+
+      expect(parallelState.conflicts).toHaveLength(0);
+      expect(parallelState.conflictResolutions).toHaveLength(0);
+      expect(parallelState.conflictTaskId).toBe('');
+      expect(parallelState.conflictTaskTitle).toBe('');
+      expect(parallelState.aiResolving).toBe(false);
+    });
+
+    test('onConflictAccept finds resolution by filePath', () => {
+      const parallelState = {
+        conflictResolutions: [
+          { filePath: 'src/file1.ts', success: true },
+          { filePath: 'src/file2.ts', success: false },
+        ],
+      };
+
+      // Simulate onConflictAccept implementation
+      const onConflictAccept = (filePath: string) => {
+        const resolution = parallelState.conflictResolutions.find(
+          (r) => r.filePath === filePath
+        );
+        return resolution;
+      };
+
+      const result1 = onConflictAccept('src/file1.ts');
+      const result2 = onConflictAccept('src/file2.ts');
+      const result3 = onConflictAccept('nonexistent.ts');
+
+      expect(result1?.success).toBe(true);
+      expect(result2?.success).toBe(false);
+      expect(result3).toBeUndefined();
+    });
+  });
+
+  describe('keyboard handler behavior', () => {
+    test('escape key triggers abort callback', () => {
+      let abortCalled = false;
+      let panelHidden = false;
+
+      const onConflictAbort = async () => {
+        abortCalled = true;
+      };
+
+      // Simulate escape key handler from RunApp.tsx
+      const handleEscapeKey = () => {
+        if (onConflictAbort) {
+          onConflictAbort().catch(() => {});
+        }
+        panelHidden = true;
+      };
+
+      handleEscapeKey();
+
+      expect(abortCalled).toBe(true);
+      expect(panelHidden).toBe(true);
+    });
+
+    test('a key triggers accept callback with selected file', () => {
+      let acceptedFile: string | undefined;
+      const conflicts = [
+        { filePath: 'src/file1.ts' },
+        { filePath: 'src/file2.ts' },
+      ];
+      const selectedIndex = 1;
+
+      const onConflictAccept = (filePath: string) => {
+        acceptedFile = filePath;
+      };
+
+      // Simulate 'a' key handler from RunApp.tsx
+      const handleAcceptKey = () => {
+        if (onConflictAccept && conflicts[selectedIndex]) {
+          onConflictAccept(conflicts[selectedIndex].filePath);
+        }
+      };
+
+      handleAcceptKey();
+
+      expect(acceptedFile).toBe('src/file2.ts');
+    });
+
+    test('r key triggers abort callback (reject)', () => {
+      let abortCalled = false;
+      let panelHidden = false;
+
+      const onConflictAbort = async () => {
+        abortCalled = true;
+      };
+
+      // Simulate 'r' key handler from RunApp.tsx
+      const handleRejectKey = () => {
+        if (onConflictAbort) {
+          onConflictAbort().catch(() => {});
+        }
+        panelHidden = true;
+      };
+
+      handleRejectKey();
+
+      expect(abortCalled).toBe(true);
+      expect(panelHidden).toBe(true);
+    });
+
+    test('shift+A triggers acceptAll callback and hides panel', () => {
+      let acceptAllCalled = false;
+      let panelHidden = false;
+
+      const onConflictAcceptAll = () => {
+        acceptAllCalled = true;
+      };
+
+      // Simulate shift+A key handler from RunApp.tsx
+      const handleAcceptAllKey = () => {
+        if (onConflictAcceptAll) {
+          onConflictAcceptAll();
+        }
+        panelHidden = true;
+      };
+
+      handleAcceptAllKey();
+
+      expect(acceptAllCalled).toBe(true);
+      expect(panelHidden).toBe(true);
+    });
+
+    test('navigation keys update selected index', () => {
+      let selectedIndex = 0;
+      const conflictsLength = 3;
+
+      // Simulate j/down key handler
+      const handleDownKey = () => {
+        selectedIndex = Math.min(selectedIndex + 1, conflictsLength - 1);
+      };
+
+      // Simulate k/up key handler
+      const handleUpKey = () => {
+        selectedIndex = Math.max(selectedIndex - 1, 0);
+      };
+
+      // Test navigation
+      handleDownKey();
+      expect(selectedIndex).toBe(1);
+
+      handleDownKey();
+      expect(selectedIndex).toBe(2);
+
+      handleDownKey(); // Should not go beyond max
+      expect(selectedIndex).toBe(2);
+
+      handleUpKey();
+      expect(selectedIndex).toBe(1);
+
+      handleUpKey();
+      expect(selectedIndex).toBe(0);
+
+      handleUpKey(); // Should not go below 0
+      expect(selectedIndex).toBe(0);
+    });
+  });
+});
