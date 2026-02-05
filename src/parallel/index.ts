@@ -472,12 +472,15 @@ export class ParallelExecutor {
           // Save tracker state before merge to prevent worktree's stale copy from overwriting
           const savedState = await this.saveTrackerState();
 
-          // Enqueue and process merge
+          // Enqueue and process merge (wrapped in try/finally to guarantee restore)
+          let mergeResult: Awaited<ReturnType<typeof this.mergeEngine.processNext>>;
           this.mergeEngine.enqueue(result);
-          const mergeResult = await this.mergeEngine.processNext();
-
-          // Restore tracker state after merge to preserve task completion status
-          await this.restoreTrackerState(savedState);
+          try {
+            mergeResult = await this.mergeEngine.processNext();
+          } finally {
+            // Restore tracker state after merge to preserve task completion status
+            await this.restoreTrackerState(savedState);
+          }
 
           if (mergeResult?.success) {
             // Merge succeeded - mark task as complete in tracker
@@ -522,12 +525,16 @@ export class ParallelExecutor {
           // Save tracker state before conflict resolution
           const savedState = await this.saveTrackerState();
 
-          const resolutions =
-            await this.conflictResolver.resolveConflicts(operation);
-          const allResolved = resolutions.every((r) => r.success);
-
-          // Restore tracker state after conflict resolution
-          await this.restoreTrackerState(savedState);
+          // Resolve conflicts (wrapped in try/finally to guarantee restore)
+          let resolutions: Awaited<ReturnType<typeof this.conflictResolver.resolveConflicts>>;
+          let allResolved: boolean;
+          try {
+            resolutions = await this.conflictResolver.resolveConflicts(operation);
+            allResolved = resolutions.every((r) => r.success);
+          } finally {
+            // Restore tracker state after conflict resolution
+            await this.restoreTrackerState(savedState);
+          }
 
           if (allResolved) {
             // Conflict resolution succeeded - mark task as complete
