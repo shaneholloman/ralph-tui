@@ -4,6 +4,10 @@
  * Supports configurable error handling strategies: retry, skip, abort.
  */
 
+import { closeSync, openSync, writeSync } from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type {
   ActiveAgentState,
   ActiveAgentReason,
@@ -987,8 +991,72 @@ export class ExecutionEngine {
     // For Claude and OpenCode, we use the onJsonlMessage callback which gets pre-parsed messages.
     const isDroidAgent = this.agent?.meta.id === 'droid';
     const droidJsonlParser = isDroidAgent ? createDroidStreamingJsonlParser() : null;
+    let rawOutputTempDir: string | undefined;
+    let rawStdoutFilePath: string | undefined;
+    let rawStderrFilePath: string | undefined;
+    let rawStdoutFd: number | undefined;
+    let rawStderrFd: number | undefined;
+
+    const closeRawOutputFiles = (): void => {
+      if (rawStdoutFd !== undefined) {
+        try {
+          closeSync(rawStdoutFd);
+        } catch {
+          // Ignore close errors for best-effort cleanup
+        }
+        rawStdoutFd = undefined;
+      }
+
+      if (rawStderrFd !== undefined) {
+        try {
+          closeSync(rawStderrFd);
+        } catch {
+          // Ignore close errors for best-effort cleanup
+        }
+        rawStderrFd = undefined;
+      }
+    };
+
+    const appendRawChunk = (
+      stream: 'stdout' | 'stderr',
+      chunk: string
+    ): void => {
+      if (stream === 'stdout' && rawStdoutFd !== undefined) {
+        try {
+          writeSync(rawStdoutFd, chunk, undefined, 'utf-8');
+        } catch {
+          closeRawOutputFiles();
+          rawStdoutFilePath = undefined;
+          rawStderrFilePath = undefined;
+        }
+        return;
+      }
+
+      if (stream === 'stderr' && rawStderrFd !== undefined) {
+        try {
+          writeSync(rawStderrFd, chunk, undefined, 'utf-8');
+        } catch {
+          closeRawOutputFiles();
+          rawStdoutFilePath = undefined;
+          rawStderrFilePath = undefined;
+        }
+      }
+    };
 
     try {
+      try {
+        rawOutputTempDir = await mkdtemp(join(tmpdir(), 'ralph-iter-'));
+        rawStdoutFilePath = join(rawOutputTempDir, 'stdout.raw');
+        rawStderrFilePath = join(rawOutputTempDir, 'stderr.raw');
+        rawStdoutFd = openSync(rawStdoutFilePath, 'w');
+        rawStderrFd = openSync(rawStderrFilePath, 'w');
+      } catch {
+        closeRawOutputFiles();
+        rawOutputTempDir = undefined;
+        rawStdoutFilePath = undefined;
+        rawStderrFilePath = undefined;
+      }
+
       // Execute agent with subagent tracing if supported
       const handle = this.agent!.execute(prompt, [], {
         cwd: this.config.cwd,
@@ -1037,6 +1105,7 @@ export class ExecutionEngine {
             data,
             MAX_ENGINE_LIVE_STREAM_CHARS
           );
+          appendRawChunk('stdout', data);
           this.emit({
             type: 'agent:output',
             timestamp: new Date().toISOString(),
@@ -1069,6 +1138,7 @@ export class ExecutionEngine {
             data,
             MAX_ENGINE_LIVE_STREAM_CHARS
           );
+          appendRawChunk('stderr', data);
           this.emit({
             type: 'agent:output',
             timestamp: new Date().toISOString(),
@@ -1100,6 +1170,8 @@ export class ExecutionEngine {
           }
         }
       }
+
+      closeRawOutputFiles();
 
       // Check for rate limit condition before processing result
       const rateLimitResult = this.checkForRateLimit(
@@ -1247,6 +1319,8 @@ export class ExecutionEngine {
         agentSwitches: this.currentIterationAgentSwitches.length > 0 ? [...this.currentIterationAgentSwitches] : undefined,
         completionSummary,
         sandboxConfig: this.config.sandbox,
+        rawStdoutFilePath,
+        rawStderrFilePath,
       });
 
       this.emit({
@@ -1279,6 +1353,12 @@ export class ExecutionEngine {
 
       return failedResult;
     } finally {
+      closeRawOutputFiles();
+      if (rawOutputTempDir) {
+        await rm(rawOutputTempDir, { recursive: true, force: true }).catch(() => {
+          // Ignore cleanup errors for temporary files
+        });
+      }
       this.state.currentTask = null;
     }
   }
