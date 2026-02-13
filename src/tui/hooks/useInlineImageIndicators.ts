@@ -209,8 +209,16 @@ export function useInlineImageIndicators(): UseInlineImageIndicatorsReturn {
 
       // Assign next available number
       const number = currentNextNumber;
-      setIndicatorMap((prev) => ({ ...prev, [imageId]: number }));
-      setNextNumber((prev) => prev + 1);
+      const nextMap = { ...currentMap, [imageId]: number };
+      const nextNumber = number + 1;
+
+      // Update refs immediately to avoid duplicate assignments on rapid calls.
+      indicatorMapRef.current = nextMap;
+      nextNumberRef.current = nextNumber;
+
+      // Mirror refs in state for rendering.
+      setIndicatorMap(nextMap);
+      setNextNumber(nextNumber);
       return number;
     },
     [], // No dependencies needed since we use refs

@@ -5,7 +5,16 @@
  */
 
 import { createHash } from 'node:crypto';
-import { join, extname } from 'node:path';
+import {
+  join,
+  extname,
+  isAbsolute,
+  resolve,
+  relative,
+  sep,
+  dirname,
+  basename,
+} from 'node:path';
 import { readdir, unlink, mkdir, rm } from 'node:fs/promises';
 
 /** Supported image extensions for storage */
@@ -436,12 +445,39 @@ export async function deleteStoredImage(
   baseDir?: string,
 ): Promise<boolean> {
   try {
-    // Determine if it's a full path or just a filename
-    const isFullPath =
-      pathOrFilename.includes('/') || pathOrFilename.includes('\\');
-    const fullPath = isFullPath
-      ? pathOrFilename
-      : join(getStorageDir(baseDir), pathOrFilename);
+    const absoluteInput = isAbsolute(pathOrFilename);
+    let storageDir: string;
+    let fullPath: string;
+
+    if (absoluteInput && !baseDir) {
+      fullPath = resolve(pathOrFilename);
+      // For absolute paths without baseDir, only allow files directly inside
+      // a recognized ".ralph-tui/images" storage directory.
+      storageDir = dirname(fullPath);
+      const ralphDir = dirname(storageDir);
+      if (
+        basename(storageDir) !== IMAGES_DIR_NAME ||
+        basename(ralphDir) !== STORAGE_DIR_NAME
+      ) {
+        return false;
+      }
+    } else {
+      storageDir = resolve(getStorageDir(baseDir));
+      fullPath = absoluteInput
+        ? resolve(pathOrFilename)
+        : resolve(storageDir, pathOrFilename);
+    }
+
+    // Ensure target stays inside the storage directory.
+    const relativePath = relative(storageDir, fullPath);
+    if (
+      relativePath === '' ||
+      relativePath.startsWith('..') ||
+      relativePath.includes(`..${sep}`) ||
+      isAbsolute(relativePath)
+    ) {
+      return false;
+    }
 
     // Check if file exists
     const file = Bun.file(fullPath);

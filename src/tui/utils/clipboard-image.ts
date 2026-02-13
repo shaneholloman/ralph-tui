@@ -119,7 +119,6 @@ function getInstallHints(): Record<string, string> {
           'Install xclip: sudo apt install xclip (Debian/Ubuntu) or sudo pacman -S xclip (Arch)',
         'wl-paste':
           'Install wl-clipboard: sudo apt install wl-clipboard (Debian/Ubuntu) or sudo pacman -S wl-clipboard (Arch)',
-        xsel: 'Install xsel: sudo apt install xsel (Debian/Ubuntu) or sudo pacman -S xsel (Arch)',
       };
 
     case 'win32':
@@ -158,9 +157,6 @@ export async function checkClipboardTool(): Promise<ClipboardToolInfo> {
       }
       if (await commandExists('xclip')) {
         return { available: true, toolName: 'xclip' };
-      }
-      if (await commandExists('xsel')) {
-        return { available: true, toolName: 'xsel' };
       }
       return {
         available: false,

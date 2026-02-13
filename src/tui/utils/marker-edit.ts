@@ -1,4 +1,7 @@
-// src/tui/utils/marker-edit.ts
+/**
+ * ABOUTME: Marker-edit utilities for atomic [Image N] marker handling in textareas.
+ * Provides marker lookup, overlap detection, and safe range deletion behavior for chat input.
+ */
 import type { TextareaRenderable } from '@opentui/core';
 
 export type MarkerInfo = { start: number; end: number; imageNumber: number };

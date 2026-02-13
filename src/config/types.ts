@@ -96,7 +96,7 @@ export const DEFAULT_IMAGE_CONFIG: Required<ImageConfig> = {
   enabled: true,
   cleanup_policy: "on_exit",
   skip_cleanup_confirmation: false,
-  max_images_per_message: 0, // 0 = unlimited
+  max_images_per_message: 10,
   show_paste_hints: true,
 };
 

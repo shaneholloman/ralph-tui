@@ -4,18 +4,17 @@
  * and provides a clean API for attaching, removing, and formatting images for prompts.
  */
 
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useRef } from 'react';
 import { randomUUID } from 'node:crypto';
 import { basename } from 'node:path';
 
-import { detectImagePath } from '../utils/image-detection.js';
+import { detectImagePath, detectBase64Image } from '../utils/image-detection.js';
 import {
   readClipboardImage,
   hasClipboardImage,
 } from '../utils/clipboard-image.js';
 import {
   storeImageFromPath,
-  storeImageFromBase64,
   storeImageFromBuffer,
   deleteStoredImage,
 } from '../utils/image-storage.js';
@@ -129,87 +128,6 @@ export interface UseImageAttachmentReturn {
 }
 
 /**
- * Pattern to detect base64 image data.
- * Matches data URIs (data:image/png;base64,...) or raw base64 that looks like image data.
- */
-const BASE64_DATA_URI_PATTERN = /^data:image\/(png|jpeg|jpg|gif|webp);base64,/i;
-
-/**
- * Pattern to detect raw base64 data (without data URI prefix).
- * Checks for valid base64 characters and reasonable length for an image.
- */
-const RAW_BASE64_PATTERN = /^[A-Za-z0-9+/]+=*$/;
-
-/**
- * Minimum length for base64 data to be considered potentially an image.
- * A 1x1 PNG is about 68 bytes base64-encoded.
- */
-const MIN_BASE64_LENGTH = 50;
-
-/**
- * Check if a string looks like base64 image data.
- *
- * @param input - String to check
- * @returns Object with isBase64 flag and detected extension
- */
-function detectBase64Image(input: string): {
-  isBase64: boolean;
-  extension?: string;
-} {
-  const trimmed = input.trim();
-
-  // Check for data URI format
-  const dataUriMatch = trimmed.match(BASE64_DATA_URI_PATTERN);
-  if (dataUriMatch) {
-    const ext = dataUriMatch[1].toLowerCase();
-    return { isBase64: true, extension: ext === 'jpg' ? 'jpeg' : ext };
-  }
-
-  // Check for raw base64 (must be reasonably long and valid)
-  if (trimmed.length >= MIN_BASE64_LENGTH && RAW_BASE64_PATTERN.test(trimmed)) {
-    // Try to detect image type from magic bytes after decoding first few bytes
-    try {
-      const partial = Buffer.from(trimmed.slice(0, 16), 'base64');
-      // PNG magic: 89 50 4E 47
-      if (
-        partial[0] === 0x89 &&
-        partial[1] === 0x50 &&
-        partial[2] === 0x4e &&
-        partial[3] === 0x47
-      ) {
-        return { isBase64: true, extension: 'png' };
-      }
-      // JPEG magic: FF D8 FF
-      if (partial[0] === 0xff && partial[1] === 0xd8 && partial[2] === 0xff) {
-        return { isBase64: true, extension: 'jpeg' };
-      }
-      // GIF magic: 47 49 46 38
-      if (
-        partial[0] === 0x47 &&
-        partial[1] === 0x49 &&
-        partial[2] === 0x46 &&
-        partial[3] === 0x38
-      ) {
-        return { isBase64: true, extension: 'gif' };
-      }
-      // WebP magic: 52 49 46 46 ... 57 45 42 50
-      if (
-        partial[0] === 0x52 &&
-        partial[1] === 0x49 &&
-        partial[2] === 0x46 &&
-        partial[3] === 0x46
-      ) {
-        return { isBase64: true, extension: 'webp' };
-      }
-    } catch {
-      // Invalid base64, not an image
-    }
-  }
-
-  return { isBase64: false };
-}
-
-/**
  * Generate a display name for an attached image.
  *
  * @param source - Original source of the image
@@ -281,13 +199,14 @@ export function useImageAttachment(
   const maxImages =
     options.maxImagesPerMessage ?? DEFAULT_IMAGE_CONFIG.max_images_per_message;
   const [attachedImages, setAttachedImages] = useState<AttachedImage[]>([]);
+  const imageCountRef = useRef(0);
 
   /**
    * Attach an image from the system clipboard.
    */
   const attachFromClipboard = useCallback(async (): Promise<AttachResult> => {
     // Check if we've reached the max limit (0 = unlimited)
-    if (maxImages > 0 && attachedImages.length >= maxImages) {
+    if (maxImages > 0 && imageCountRef.current >= maxImages) {
       return {
         success: false,
         error: `Maximum of ${maxImages} images allowed per message`,
@@ -326,7 +245,7 @@ export function useImageAttachment(
 
     // Calculate the image number (1-indexed) before updating state
     // This ensures consistency between the returned number and the actual position
-    const imageNumber = attachedImages.length + 1;
+    const imageNumber = imageCountRef.current + 1;
     const inlineMarker = `[Image ${imageNumber}]`;
 
     // Create the attachment
@@ -341,10 +260,14 @@ export function useImageAttachment(
       ),
     };
 
-    setAttachedImages((prev) => [...prev, image]);
+    setAttachedImages((prev) => {
+      const next = [...prev, image];
+      imageCountRef.current = next.length;
+      return next;
+    });
 
     return { success: true, image, imageNumber, inlineMarker };
-  }, [maxImages, attachedImages.length]);
+  }, [maxImages]);
 
   /**
    * Attach an image from various input sources.
@@ -359,7 +282,7 @@ export function useImageAttachment(
       }
 
       // Check if we've reached the max limit (0 = unlimited)
-      if (maxImages > 0 && attachedImages.length >= maxImages) {
+      if (maxImages > 0 && imageCountRef.current >= maxImages) {
         return {
           success: false,
           error: `Maximum of ${maxImages} images allowed per message`,
@@ -368,9 +291,16 @@ export function useImageAttachment(
 
       // Check if input is base64 image data
       const base64Check = detectBase64Image(trimmedInput);
-      if (base64Check.isBase64 && base64Check.extension) {
-        const storageResult = await storeImageFromBase64(
-          trimmedInput,
+      if (base64Check.isBase64Image) {
+        if (!base64Check.imageData || !base64Check.extension) {
+          return {
+            success: false,
+            error: base64Check.error ?? 'Failed to parse base64 image data',
+          };
+        }
+
+        const storageResult = await storeImageFromBuffer(
+          base64Check.imageData,
           base64Check.extension,
         );
         if (!storageResult.success || !storageResult.path) {
@@ -381,7 +311,7 @@ export function useImageAttachment(
         }
 
         // Calculate image number before state update
-        const imageNumber = attachedImages.length + 1;
+        const imageNumber = imageCountRef.current + 1;
         const inlineMarker = `[Image ${imageNumber}]`;
 
         const image: AttachedImage = {
@@ -395,7 +325,11 @@ export function useImageAttachment(
           ),
         };
 
-        setAttachedImages((prev) => [...prev, image]);
+        setAttachedImages((prev) => {
+          const next = [...prev, image];
+          imageCountRef.current = next.length;
+          return next;
+        });
 
         return { success: true, image, imageNumber, inlineMarker };
       }
@@ -412,7 +346,7 @@ export function useImageAttachment(
         }
 
         // Calculate image number before state update
-        const imageNumber = attachedImages.length + 1;
+        const imageNumber = imageCountRef.current + 1;
         const inlineMarker = `[Image ${imageNumber}]`;
 
         const image: AttachedImage = {
@@ -426,7 +360,11 @@ export function useImageAttachment(
           ),
         };
 
-        setAttachedImages((prev) => [...prev, image]);
+        setAttachedImages((prev) => {
+          const next = [...prev, image];
+          imageCountRef.current = next.length;
+          return next;
+        });
 
         return { success: true, image, imageNumber, inlineMarker };
       }
@@ -438,7 +376,7 @@ export function useImageAttachment(
         error: pathResult.error ?? 'Input is not a recognized image format',
       };
     },
-    [attachFromClipboard, maxImages, attachedImages.length],
+    [attachFromClipboard, maxImages],
   );
 
   /**
@@ -458,7 +396,9 @@ export function useImageAttachment(
       });
 
       // Remove from array
-      return prev.filter((_, i) => i !== index);
+      const next = prev.filter((_, i) => i !== index);
+      imageCountRef.current = next.length;
+      return next;
     });
   }, []);
 
@@ -482,7 +422,9 @@ export function useImageAttachment(
       });
 
       // Remove from array
-      return prev.filter((_, i) => i !== index);
+      const next = prev.filter((_, i) => i !== index);
+      imageCountRef.current = next.length;
+      return next;
     });
   }, []);
 
@@ -491,26 +433,23 @@ export function useImageAttachment(
    * Used when user deletes an indicator via backspace/delete.
    */
   const removeImageById = useCallback((imageId: string): boolean => {
-    let found = false;
-    setAttachedImages((prev) => {
-      const index = prev.findIndex((img) => img.id === imageId);
-      if (index === -1) {
-        return prev;
-      }
+    const imageToRemove = attachedImages.find((img) => img.id === imageId);
+    if (!imageToRemove) {
+      return false;
+    }
 
-      found = true;
-      const imageToRemove = prev[index];
-
-      // Delete the stored file since the user explicitly removed the marker
-      deleteStoredImage(imageToRemove.storedPath).catch(() => {
-        // Ignore deletion errors
-      });
-
-      // Remove from array
-      return prev.filter((_, i) => i !== index);
+    // Delete the stored file since the user explicitly removed the marker
+    deleteStoredImage(imageToRemove.storedPath).catch(() => {
+      // Ignore deletion errors
     });
-    return found;
-  }, []);
+
+    setAttachedImages((prev) => {
+      const next = prev.filter((img) => img.id !== imageId);
+      imageCountRef.current = next.length;
+      return next;
+    });
+    return true;
+  }, [attachedImages]);
 
   /**
    * Remove all attached images.
@@ -530,6 +469,7 @@ export function useImageAttachment(
           });
         }
       }
+      imageCountRef.current = 0;
       return [];
     });
   }, []);

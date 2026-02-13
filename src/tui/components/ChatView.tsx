@@ -571,7 +571,9 @@ export function ChatView({
       // If a custom paste handler is provided, call it
       // The handler can call event.preventDefault() to stop default paste behavior
       if (onPaste) {
-        onPaste(text, event);
+        void Promise.resolve(onPaste(text, event)).catch((error) => {
+          console.error('Paste handler failed:', error);
+        });
       }
       // If no handler or handler didn't prevent default, OpenTUI's textarea
       // will handle the paste normally

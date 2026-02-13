@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, test, beforeEach, afterEach } from 'bun:test';
-import { mkdir, rm, readFile } from 'node:fs/promises';
+import { mkdir, rm, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { storeImageFromBuffer, deleteStoredImage } from './image-storage.js';
@@ -201,6 +201,20 @@ describe('Image Storage', () => {
     test('returns false for non-existent image', async () => {
       const deleted = await deleteStoredImage(join(testDir, 'nonexistent.png'));
       expect(deleted).toBe(false);
+    });
+
+    test('rejects relative path traversal attempts', async () => {
+      const deleted = await deleteStoredImage('../../etc/passwd', testDir);
+      expect(deleted).toBe(false);
+    });
+
+    test('rejects absolute paths outside storage directory', async () => {
+      const outsidePath = join(testDir, 'outside.png');
+      await writeFile(outsidePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+
+      const deleted = await deleteStoredImage(outsidePath);
+      expect(deleted).toBe(false);
+      expect(await Bun.file(outsidePath).exists()).toBe(true);
     });
   });
 });
