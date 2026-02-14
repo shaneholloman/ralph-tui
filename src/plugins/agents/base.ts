@@ -5,9 +5,9 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
-import { appendFileSync } from 'node:fs';
+import { accessSync, appendFileSync } from 'node:fs';
 import { tmpdir, platform } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 
 /** Debug log helper - writes to file to avoid TUI interference */
 function debugLog(msg: string): void {
@@ -31,6 +31,28 @@ export function findCommandPath(
 ): Promise<{ found: boolean; path: string }> {
   return new Promise((resolve) => {
     const isWindows = platform() === 'win32';
+    const trimmedCommand = command.trim();
+    const normalizedCommand = trimmedCommand.startsWith('"') && trimmedCommand.endsWith('"')
+      ? trimmedCommand.slice(1, -1)
+      : trimmedCommand;
+
+    const isPathLikeCommand =
+      isAbsolute(normalizedCommand) ||
+      normalizedCommand.includes('/') ||
+      normalizedCommand.includes('\\');
+
+    if (isPathLikeCommand) {
+      try {
+        accessSync(normalizedCommand);
+        return resolve({
+          found: true,
+          path: normalizedCommand,
+        });
+      } catch {
+        return resolve({ found: false, path: '' });
+      }
+    }
+
     const whichCmd = isWindows ? 'where' : 'which';
 
     const proc = spawn(whichCmd, [command], {
