@@ -492,5 +492,81 @@ describe('ParallelExecutor class', () => {
       expect(statusUpdates).toContainEqual({ taskId: 'A', status: 'open' });
       expect((executor as any).requeueCounts.get('A')).toBe(1);
     });
+
+    test('executeGroup resets failed worker tasks to open', async () => {
+      const tracker = createMockTracker();
+      const statusUpdates: Array<{ taskId: string; status: string }> = [];
+      tracker.updateTaskStatus = async (taskId, status) => {
+        statusUpdates.push({ taskId, status });
+        return undefined;
+      };
+
+      const executor = new ParallelExecutor(createMockConfig(), tracker, {
+        maxRequeueCount: 1,
+      });
+      const taskA = task('A');
+      const group = { index: 0, tasks: [taskA], depth: 0 };
+
+      (executor as any).taskGraph = createSingleGroupAnalysis(taskA);
+      (executor as any).batchTasks = () => [[taskA]];
+      (executor as any).executeBatch = async () => [
+        createWorkerResult(taskA, { success: false, taskCompleted: false, commitCount: 0 }),
+      ];
+
+      await (executor as any).executeGroup(group, 0);
+
+      expect(statusUpdates).toContainEqual({ taskId: 'A', status: 'open' });
+      expect((executor as any).totalTasksFailed).toBe(1);
+    });
+
+    test('executeGroup counts merge failure as failed task (not completed)', async () => {
+      const tracker = createMockTracker();
+      const statusUpdates: Array<{ taskId: string; status: string }> = [];
+      tracker.updateTaskStatus = async (taskId, status) => {
+        statusUpdates.push({ taskId, status });
+        return undefined;
+      };
+
+      const executor = new ParallelExecutor(createMockConfig(), tracker, {
+        maxRequeueCount: 1,
+      });
+      const taskA = task('A');
+      const group = { index: 0, tasks: [taskA], depth: 0 };
+      const events: ParallelEvent[] = [];
+      executor.on((event) => events.push(event));
+
+      (executor as any).taskGraph = createSingleGroupAnalysis(taskA);
+      (executor as any).batchTasks = () => [[taskA]];
+      (executor as any).executeBatch = async () => [
+        createWorkerResult(taskA, { success: true, taskCompleted: true, commitCount: 1 }),
+      ];
+      (executor as any).mergeEngine = {
+        enqueue: () => {},
+        getQueue: () => [],
+        processNext: async () => ({
+          operationId: 'op-1',
+          success: false,
+          strategy: 'merge-commit',
+          hadConflicts: false,
+          filesChanged: 0,
+          durationMs: 1,
+          error: 'merge failed',
+        }),
+      };
+
+      await (executor as any).executeGroup(group, 0);
+
+      const completedEvent = events.find((e) => e.type === 'parallel:group-completed');
+      expect(completedEvent?.type).toBe('parallel:group-completed');
+      if (completedEvent?.type === 'parallel:group-completed') {
+        expect(completedEvent.tasksCompleted).toBe(0);
+        expect(completedEvent.tasksFailed).toBe(1);
+        expect(completedEvent.mergesCompleted).toBe(0);
+        expect(completedEvent.mergesFailed).toBe(1);
+      }
+      expect((executor as any).totalTasksCompleted).toBe(0);
+      expect((executor as any).totalTasksFailed).toBe(1);
+      expect(statusUpdates).toContainEqual({ taskId: 'A', status: 'open' });
+    });
   });
 });

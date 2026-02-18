@@ -182,6 +182,47 @@ export function applyParallelCompletionState(
 }
 
 /**
+ * Determine whether a parallel run is fully complete.
+ * Requires both completed status and completed task counts.
+ */
+export function isParallelExecutionComplete(
+  executorStatus: ParallelExecutorStatus,
+  totalTasksCompleted: number,
+  totalTasks: number
+): boolean {
+  return executorStatus === 'completed' && totalTasksCompleted >= totalTasks;
+}
+
+/**
+ * Apply task-tracking set updates after a conflict:resolved event.
+ *
+ * When resolution results are empty, the conflict was skipped and the task must
+ * remain in completed-locally state (not merged).
+ */
+export function applyConflictResolvedTaskTracking(
+  completedLocallyTaskIds: Set<string>,
+  mergedTaskIds: Set<string>,
+  taskId: string,
+  resolutionCount: number
+): { completedLocallyTaskIds: Set<string>; mergedTaskIds: Set<string> } {
+  if (resolutionCount < 1) {
+    return {
+      completedLocallyTaskIds,
+      mergedTaskIds,
+    };
+  }
+
+  const nextCompletedLocally = new Set(completedLocallyTaskIds);
+  nextCompletedLocally.delete(taskId);
+  const nextMerged = new Set([...mergedTaskIds, taskId]);
+
+  return {
+    completedLocallyTaskIds: nextCompletedLocally,
+    mergedTaskIds: nextMerged,
+  };
+}
+
+/**
  * Get git repository information for the current working directory.
  * Returns undefined values if not a git repository or git command fails.
  */
@@ -1894,15 +1935,14 @@ async function runParallelWithTui(
         parallelState.showConflicts = false;
         // Refresh merge queue to show updated status (conflicted -> completed)
         parallelState.mergeQueue = [...parallelExecutor.getState().mergeQueue];
-        // Task successfully merged after conflict resolution — update tracking sets
-        // Remove from completedLocally (no more ⚠ warning) and add to merged (shows ✓)
-        const resolvedSet = new Set(parallelState.completedLocallyTaskIds);
-        resolvedSet.delete(event.taskId);
-        parallelState.completedLocallyTaskIds = resolvedSet;
-        parallelState.mergedTaskIds = new Set([
-          ...parallelState.mergedTaskIds,
+        const taskTracking = applyConflictResolvedTaskTracking(
+          parallelState.completedLocallyTaskIds,
+          parallelState.mergedTaskIds,
           event.taskId,
-        ]);
+          event.results.length
+        );
+        parallelState.completedLocallyTaskIds = taskTracking.completedLocallyTaskIds;
+        parallelState.mergedTaskIds = taskTracking.mergedTaskIds;
         break;
       }
 
@@ -3024,6 +3064,9 @@ export async function executeRunCommand(args: string[]): Promise<void> {
         originalBranchForGuidance = parallelExecutor.getOriginalBranch();
       } else {
         // Parallel headless mode — log events to console
+        let parallelSignalInterrupted = false;
+        let parallelExecutionPromise: Promise<void> | null = null;
+
         parallelExecutor.on((event) => {
           const time = new Date(event.timestamp).toLocaleTimeString();
           switch (event.type) {
@@ -3071,10 +3114,19 @@ export async function executeRunCommand(args: string[]): Promise<void> {
 
         // Signal handlers for graceful shutdown in parallel headless mode
         const handleParallelSignal = async (): Promise<void> => {
+          if (parallelSignalInterrupted) {
+            return;
+          }
+          parallelSignalInterrupted = true;
           console.log('\n[INFO] [parallel] Received signal, stopping parallel execution...');
 
           // Stop the parallel executor
           await parallelExecutor.stop();
+
+          // Wait for execute() to unwind so cleanup (worktrees/branches/tags) completes.
+          if (parallelExecutionPromise) {
+            await parallelExecutionPromise.catch(() => {});
+          }
 
           // Reset any in_progress tasks back to open
           const activeTasks = getActiveTasks(persistedState);
@@ -3093,19 +3145,19 @@ export async function executeRunCommand(args: string[]): Promise<void> {
           // Save interrupted state
           persistedState = { ...persistedState, status: 'interrupted' };
           await savePersistedSession(persistedState);
-
-          process.exit(0);
         };
 
         process.on('SIGINT', handleParallelSignal);
         process.on('SIGTERM', handleParallelSignal);
 
         try {
-          await parallelExecutor.execute();
+          parallelExecutionPromise = parallelExecutor.execute();
+          await parallelExecutionPromise;
           // Get branch info after execution completes
           sessionBranchForGuidance = parallelExecutor.getSessionBranch();
           originalBranchForGuidance = parallelExecutor.getOriginalBranch();
         } finally {
+          parallelExecutionPromise = null;
           // Remove handlers after execution completes
           process.removeListener('SIGINT', handleParallelSignal);
           process.removeListener('SIGTERM', handleParallelSignal);
@@ -3113,7 +3165,11 @@ export async function executeRunCommand(args: string[]): Promise<void> {
       }
 
       // Show completion guidance if a session branch was created
-      if (sessionBranchForGuidance && originalBranchForGuidance) {
+      if (
+        sessionBranchForGuidance &&
+        originalBranchForGuidance &&
+        parallelExecutor.getState().status === 'completed'
+      ) {
         console.log('');
         console.log('═══════════════════════════════════════════════════════════════');
         console.log('                   Session Complete!                            ');
@@ -3140,7 +3196,11 @@ export async function executeRunCommand(args: string[]): Promise<void> {
 
       // Set parallel completion state for final check
       const pState = parallelExecutor.getState();
-      parallelAllComplete = pState.totalTasksCompleted >= pState.totalTasks || pState.status === 'completed';
+      parallelAllComplete = isParallelExecutionComplete(
+        pState.status,
+        pState.totalTasksCompleted,
+        pState.totalTasks
+      );
     } else if (config.showTui) {
       // Sequential TUI mode (existing path)
       // Pass tasks for initial TUI display in "ready" state

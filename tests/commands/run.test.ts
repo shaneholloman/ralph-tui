@@ -11,6 +11,8 @@ import {
   shouldMarkCompletedLocally,
   updateCompletedLocallyTaskIds,
   applyParallelCompletionState,
+  isParallelExecutionComplete,
+  applyConflictResolvedTaskTracking,
 } from '../../src/commands/run.jsx';
 
 describe('run command', () => {
@@ -520,6 +522,47 @@ describe('run command', () => {
       expect(next.isPaused).toBe(false);
       expect(next.activeTaskIds).toEqual([]);
       expect(next.updatedAt).not.toBe(state.updatedAt);
+    });
+  });
+
+  describe('isParallelExecutionComplete', () => {
+    test('returns true only when status is completed and counts are fully satisfied', () => {
+      expect(isParallelExecutionComplete('completed', 3, 3)).toBe(true);
+      expect(isParallelExecutionComplete('completed', 4, 3)).toBe(true);
+    });
+
+    test('returns false when status is interrupted even if counts match', () => {
+      expect(isParallelExecutionComplete('interrupted', 3, 3)).toBe(false);
+    });
+
+    test('returns false when completed status but task counts are short', () => {
+      expect(isParallelExecutionComplete('completed', 2, 3)).toBe(false);
+    });
+  });
+
+  describe('applyConflictResolvedTaskTracking', () => {
+    test('keeps completed-locally state when conflict was skipped (empty results)', () => {
+      const outcome = applyConflictResolvedTaskTracking(
+        new Set<string>(['task-1']),
+        new Set<string>(),
+        'task-1',
+        0
+      );
+
+      expect(outcome.completedLocallyTaskIds).toEqual(new Set(['task-1']));
+      expect(outcome.mergedTaskIds).toEqual(new Set());
+    });
+
+    test('moves task from completed-locally to merged when conflicts resolved', () => {
+      const outcome = applyConflictResolvedTaskTracking(
+        new Set<string>(['task-1', 'task-2']),
+        new Set<string>(['task-3']),
+        'task-1',
+        2
+      );
+
+      expect(outcome.completedLocallyTaskIds).toEqual(new Set(['task-2']));
+      expect(outcome.mergedTaskIds).toEqual(new Set(['task-3', 'task-1']));
     });
   });
 
