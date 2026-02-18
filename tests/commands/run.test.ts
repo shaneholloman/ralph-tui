@@ -9,6 +9,8 @@ import {
   printRunHelp,
   isSessionComplete,
   shouldMarkCompletedLocally,
+  updateCompletedLocallyTaskIds,
+  applyParallelCompletionState,
 } from '../../src/commands/run.jsx';
 
 describe('run command', () => {
@@ -468,6 +470,56 @@ describe('run command', () => {
     test('returns false when task did not complete regardless of commit count', () => {
       expect(shouldMarkCompletedLocally(false, 0)).toBe(false);
       expect(shouldMarkCompletedLocally(false, 3)).toBe(false);
+    });
+  });
+
+  describe('updateCompletedLocallyTaskIds', () => {
+    test('adds task ID when task completed with at least one commit', () => {
+      const next = updateCompletedLocallyTaskIds(new Set<string>(), 'task-1', true, 1);
+      expect(next).toEqual(new Set(['task-1']));
+    });
+
+    test('removes stale task ID when task completion is not mergeable', () => {
+      const next = updateCompletedLocallyTaskIds(
+        new Set<string>(['task-1', 'task-2']),
+        'task-1',
+        true,
+        0
+      );
+      expect(next).toEqual(new Set(['task-2']));
+    });
+  });
+
+  describe('applyParallelCompletionState', () => {
+    test('marks session completed when executor status is completed', () => {
+      const state = {
+        status: 'running',
+        isPaused: true,
+        activeTaskIds: ['task-1'],
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      } as any;
+
+      const next = applyParallelCompletionState(state, 'completed');
+
+      expect(next.status).toBe('completed');
+      expect(next.isPaused).toBe(false);
+      expect(next.activeTaskIds).toEqual(['task-1']);
+    });
+
+    test('marks session interrupted and clears active tasks when executor is not completed', () => {
+      const state = {
+        status: 'running',
+        isPaused: true,
+        activeTaskIds: ['task-1', 'task-2'],
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      } as any;
+
+      const next = applyParallelCompletionState(state, 'interrupted');
+
+      expect(next.status).toBe('interrupted');
+      expect(next.isPaused).toBe(false);
+      expect(next.activeTaskIds).toEqual([]);
+      expect(next.updatedAt).not.toBe(state.updatedAt);
     });
   });
 

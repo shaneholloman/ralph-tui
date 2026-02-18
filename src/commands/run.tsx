@@ -49,6 +49,7 @@ import type {
   MergeOperation,
   FileConflict,
   ConflictResolutionResult,
+  ParallelExecutorStatus,
 } from '../parallel/types.js';
 import type { ParallelEvent } from '../parallel/events.js';
 import { registerBuiltinAgents } from '../plugins/agents/builtin/index.js';
@@ -137,6 +138,47 @@ export function shouldMarkCompletedLocally(
   commitCount: number
 ): boolean {
   return taskCompleted && commitCount > 0;
+}
+
+/**
+ * Compute the next completed-locally task ID set for a worker completion event.
+ */
+export function updateCompletedLocallyTaskIds(
+  completedLocallyTaskIds: Set<string>,
+  taskId: string,
+  taskCompleted: boolean,
+  commitCount: number
+): Set<string> {
+  if (shouldMarkCompletedLocally(taskCompleted, commitCount)) {
+    return new Set([...completedLocallyTaskIds, taskId]);
+  }
+
+  const nextCompletedLocally = new Set(completedLocallyTaskIds);
+  nextCompletedLocally.delete(taskId);
+  return nextCompletedLocally;
+}
+
+/**
+ * Apply persisted-session state changes when parallel execution emits completed.
+ *
+ * The executor can emit `parallel:completed` after interruption as part of shutdown,
+ * so completion must be based on final executor status.
+ */
+export function applyParallelCompletionState(
+  currentState: PersistedSessionState,
+  executorStatus: ParallelExecutorStatus
+): PersistedSessionState {
+  if (executorStatus === 'completed') {
+    return completeSession(currentState);
+  }
+
+  return {
+    ...currentState,
+    status: 'interrupted',
+    isPaused: false,
+    activeTaskIds: [],
+    updatedAt: new Date().toISOString(),
+  };
 }
 
 /**
@@ -1767,18 +1809,12 @@ async function runParallelWithTui(
         // Remove task from active list in persisted session state
         currentState = removeActiveTask(currentState, event.result.task.id);
         savePersistedSession(currentState).catch(() => {});
-        // Only mark completed-locally when the worker produced a mergeable commit.
-        if (shouldMarkCompletedLocally(event.result.taskCompleted, event.result.commitCount)) {
-          parallelState.completedLocallyTaskIds = new Set([
-            ...parallelState.completedLocallyTaskIds,
-            event.result.task.id,
-          ]);
-        } else {
-          // Ensure stale UI state from previous runs does not persist for this task.
-          const nextCompletedLocally = new Set(parallelState.completedLocallyTaskIds);
-          nextCompletedLocally.delete(event.result.task.id);
-          parallelState.completedLocallyTaskIds = nextCompletedLocally;
-        }
+        parallelState.completedLocallyTaskIds = updateCompletedLocallyTaskIds(
+          parallelState.completedLocallyTaskIds,
+          event.result.task.id,
+          event.result.taskCompleted,
+          event.result.commitCount
+        );
         break;
 
       case 'worker:failed':
@@ -1871,17 +1907,10 @@ async function runParallelWithTui(
       }
 
       case 'parallel:completed':
-        if (parallelExecutor.getState().status === 'completed') {
-          currentState = completeSession(currentState);
-        } else {
-          currentState = {
-            ...currentState,
-            status: 'interrupted',
-            isPaused: false,
-            activeTaskIds: [],
-            updatedAt: new Date().toISOString(),
-          };
-        }
+        currentState = applyParallelCompletionState(
+          currentState,
+          parallelExecutor.getState().status
+        );
         savePersistedSession(currentState).catch(() => {});
         break;
 
