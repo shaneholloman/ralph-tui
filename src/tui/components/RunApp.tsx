@@ -55,6 +55,12 @@ import { platform } from 'node:os';
 import { writeToClipboard } from '../../utils/index.js';
 import { StreamingOutputParser } from '../output-parser.js';
 import type { FormattedSegment } from '../../plugins/agents/output-formatting.js';
+import {
+  summarizeTokenUsageFromOutput,
+  withContextWindow,
+  type TokenUsageSummary,
+} from '../../plugins/agents/usage.js';
+import { getModelsForProvider } from '../../models-dev/index.js';
 import type {
   WorkerDisplayState,
   MergeOperation,
@@ -406,6 +412,24 @@ function convertTasksWithDependencyStatus(trackerTasks: TrackerTask[]): TaskItem
   });
 }
 
+function parseProviderModel(model?: string): { providerId: string; modelId: string } | null {
+  if (!model || !model.includes('/')) {
+    return null;
+  }
+  const [providerId, ...rest] = model.split('/');
+  const modelId = rest.join('/');
+  if (!providerId || !modelId) {
+    return null;
+  }
+  return { providerId, modelId };
+}
+
+function normalizeUsage(usage: TokenUsageSummary, contextWindow?: number): TokenUsageSummary {
+  const normalizedTotal =
+    usage.totalTokens > 0 ? usage.totalTokens : usage.inputTokens + usage.outputTokens;
+  return withContextWindow({ ...usage, totalTokens: normalizedTotal }, contextWindow);
+}
+
 /**
  * Main RunApp component for execution view
  */
@@ -502,6 +526,9 @@ export function RunApp({
   });
   const [currentOutput, setCurrentOutput] = useState('');
   const [currentSegments, setCurrentSegments] = useState<FormattedSegment[]>([]);
+  const [taskUsageMap, setTaskUsageMap] = useState<Map<string, TokenUsageSummary>>(
+    () => new Map()
+  );
   // Streaming parser for live output - extracts readable content and prevents memory bloat
   // Use agentPlugin prop (from resolved config with CLI override) with fallback to storedConfig
   const resolvedAgentName = agentPlugin || storedConfig?.defaultAgent || storedConfig?.agent || 'claude';
@@ -510,6 +537,9 @@ export function RunApp({
       agentPlugin: resolvedAgentName,
     })
   );
+  const currentTaskIdRef = useRef<string | undefined>(undefined);
+  const localContextWindowRef = useRef<number | undefined>(undefined);
+  const [localContextWindow, setLocalContextWindow] = useState<number | undefined>(undefined);
   const [elapsedTime, setElapsedTime] = useState(0);
   const [epicName] = useState('Ralph');
   // Derive agent/tracker names from config - these are displayed in the header
@@ -551,7 +581,13 @@ export function RunApp({
   const [showClosedTasks, setShowClosedTasks] = useState(true);
   // Cache for historical iteration output loaded from disk (taskId -> { output, timing, agent, model })
   const [historicalOutputCache, setHistoricalOutputCache] = useState<
-    Map<string, { output: string; timing: IterationTimingInfo; agentPlugin?: string; model?: string }>
+    Map<string, {
+      output: string;
+      timing: IterationTimingInfo;
+      usage?: TokenUsageSummary;
+      agentPlugin?: string;
+      model?: string;
+    }>
   >(() => new Map());
   // Current task info for status display
   const [currentTaskId, setCurrentTaskId] = useState<string | undefined>(undefined);
@@ -633,6 +669,9 @@ export function RunApp({
   const [remoteAgentName, setRemoteAgentName] = useState<string | undefined>(undefined);
   const [remoteTrackerName, setRemoteTrackerName] = useState<string | undefined>(undefined);
   const [remoteModel, setRemoteModel] = useState<string | undefined>(undefined);
+  const [remoteTaskUsageMap, setRemoteTaskUsageMap] = useState<Map<string, TokenUsageSummary>>(
+    () => new Map()
+  );
   const [remoteAutoCommit, setRemoteAutoCommit] = useState<boolean | undefined>(undefined);
   // Remote sandbox config for display
   const [remoteSandboxConfig, setRemoteSandboxConfig] = useState<SandboxConfig | undefined>(undefined);
@@ -651,8 +690,17 @@ export function RunApp({
     startedAt?: string;
     endedAt?: string;
     durationMs?: number;
+    usage?: TokenUsageSummary;
     isRunning: boolean;
   }>>(new Map());
+  const remoteOutputParserRef = useRef(
+    new StreamingOutputParser({
+      agentPlugin: remoteAgentName ?? 'claude',
+    })
+  );
+  const remoteCurrentTaskIdRef = useRef<string | undefined>(undefined);
+  const remoteContextWindowRef = useRef<number | undefined>(undefined);
+  const [remoteContextWindow, setRemoteContextWindow] = useState<number | undefined>(undefined);
 
   // Get the selected tab's connection status from instanceTabs
   // This is used to trigger data fetch when connection completes
@@ -686,10 +734,32 @@ export function RunApp({
         setRemoteCurrentIteration(state.currentIteration);
         setRemoteMaxIterations(state.maxIterations);
         setRemoteOutput(state.currentOutput || '');
+        const hydratedUsage = new Map<string, TokenUsageSummary>();
+        for (const iteration of state.iterations) {
+          const usageFromIteration =
+            iteration.usage ??
+            summarizeTokenUsageFromOutput(iteration.agentResult?.stdout ?? '');
+          if (usageFromIteration) {
+            hydratedUsage.set(
+              iteration.task.id,
+              normalizeUsage(usageFromIteration)
+            );
+          }
+        }
         if (state.currentTask) {
           setRemoteCurrentTaskId(state.currentTask.id);
           setRemoteCurrentTaskTitle(state.currentTask.title);
+          remoteCurrentTaskIdRef.current = state.currentTask.id;
+
+          const liveUsage = summarizeTokenUsageFromOutput(state.currentOutput ?? '');
+          if (liveUsage) {
+            hydratedUsage.set(
+              state.currentTask.id,
+              normalizeUsage(liveUsage, remoteContextWindowRef.current)
+            );
+          }
         }
+        setRemoteTaskUsageMap(hydratedUsage);
         // Capture remote agent and rate limit state
         if (state.activeAgent) {
           setRemoteActiveAgent(state.activeAgent);
@@ -775,7 +845,9 @@ export function RunApp({
           setRemoteCurrentIteration(event.iteration);
           setRemoteCurrentTaskId(event.task.id);
           setRemoteCurrentTaskTitle(event.task.title);
+          remoteCurrentTaskIdRef.current = event.task.id;
           setRemoteOutput(''); // Clear output for new iteration
+          remoteOutputParserRef.current.reset();
           setRemoteSubagentTree([]); // Clear subagent tree for new iteration
           // Mark this task as active in the task list
           setRemoteTasks((prevTasks) =>
@@ -791,6 +863,19 @@ export function RunApp({
         case 'agent:output':
           if (event.stream === 'stdout') {
             setRemoteOutput((prev) => prev + event.data);
+            remoteOutputParserRef.current.push(event.data);
+            const usage = remoteOutputParserRef.current.getUsage();
+            const taskId = event.taskId ?? remoteCurrentTaskIdRef.current;
+            if (usage && taskId) {
+              setRemoteTaskUsageMap((prev) => {
+                const next = new Map(prev);
+                next.set(
+                  taskId,
+                  normalizeUsage(usage, remoteContextWindowRef.current)
+                );
+                return next;
+              });
+            }
           }
           // Refresh remote state to get updated subagent tree
           instanceManager.getRemoteState().then((state) => {
@@ -800,6 +885,21 @@ export function RunApp({
           }).catch((err) => {
             console.error('Failed to refresh remote state:', err);
           });
+          break;
+        case 'iteration:completed':
+          {
+            const usage = event.result.usage;
+            if (usage) {
+              setRemoteTaskUsageMap((prev) => {
+                const next = new Map(prev);
+                next.set(
+                  event.result.task.id,
+                  normalizeUsage(usage, remoteContextWindowRef.current)
+                );
+                return next;
+              });
+            }
+          }
           break;
         case 'task:completed':
           // Refresh task list
@@ -852,6 +952,153 @@ export function RunApp({
   // Compute display tracker and model for local vs remote
   const displayTrackerName = isViewingRemote ? (remoteTrackerName ?? trackerName) : trackerName;
   const displayModel = isViewingRemote ? (remoteModel ?? currentModel) : currentModel;
+
+  // Resolve model context windows for live local/remote usage indicators.
+  const modelContextCacheRef = useRef<Map<string, number | null>>(new Map());
+  const resolveModelContextWindow = useCallback(async (model?: string): Promise<number | undefined> => {
+    if (!model) {
+      return undefined;
+    }
+
+    const key = model.trim();
+    if (!key) {
+      return undefined;
+    }
+
+    if (modelContextCacheRef.current.has(key)) {
+      const cached = modelContextCacheRef.current.get(key);
+      return cached === null ? undefined : cached;
+    }
+
+    const parsed = parseProviderModel(key);
+    if (!parsed) {
+      modelContextCacheRef.current.set(key, null);
+      return undefined;
+    }
+
+    try {
+      const models = await getModelsForProvider(parsed.providerId);
+      const match = models.find((m) => m.id === parsed.modelId);
+      if (match?.contextLimit && Number.isFinite(match.contextLimit)) {
+        modelContextCacheRef.current.set(key, match.contextLimit);
+        return match.contextLimit;
+      }
+    } catch {
+      // Ignore lookup failures and fall back to unavailable context window.
+    }
+
+    modelContextCacheRef.current.set(key, null);
+    return undefined;
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void resolveModelContextWindow(currentModel).then((contextWindow) => {
+      if (!cancelled) {
+        localContextWindowRef.current = contextWindow;
+        setLocalContextWindow(contextWindow);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentModel, resolveModelContextWindow]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void resolveModelContextWindow(remoteModel).then((contextWindow) => {
+      if (!cancelled) {
+        remoteContextWindowRef.current = contextWindow;
+        setRemoteContextWindow(contextWindow);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [remoteModel, resolveModelContextWindow]);
+
+  useEffect(() => {
+    if (localContextWindow === undefined) {
+      return;
+    }
+
+    setTaskUsageMap((prev) => {
+      if (prev.size === 0) {
+        return prev;
+      }
+      const next = new Map<string, TokenUsageSummary>();
+      for (const [taskId, usage] of prev.entries()) {
+        next.set(taskId, normalizeUsage(usage, localContextWindow));
+      }
+      return next;
+    });
+
+    setIterations((prev) =>
+      prev.map((iteration) =>
+        iteration.usage
+          ? {
+              ...iteration,
+              usage: normalizeUsage(iteration.usage, localContextWindow),
+            }
+          : iteration
+      )
+    );
+
+    setHistoricalOutputCache((prev) => {
+      if (prev.size === 0) {
+        return prev;
+      }
+      const next = new Map(prev);
+      for (const [taskId, cacheEntry] of prev.entries()) {
+        if (!cacheEntry.usage) {
+          continue;
+        }
+        next.set(taskId, {
+          ...cacheEntry,
+          usage: normalizeUsage(cacheEntry.usage, localContextWindow),
+        });
+      }
+      return next;
+    });
+  }, [localContextWindow]);
+
+  useEffect(() => {
+    if (remoteContextWindow === undefined) {
+      return;
+    }
+
+    setRemoteTaskUsageMap((prev) => {
+      if (prev.size === 0) {
+        return prev;
+      }
+      const next = new Map<string, TokenUsageSummary>();
+      for (const [taskId, usage] of prev.entries()) {
+        next.set(taskId, normalizeUsage(usage, remoteContextWindow));
+      }
+      return next;
+    });
+
+    setRemoteIterationCache((prev) => {
+      if (prev.size === 0) {
+        return prev;
+      }
+      const next = new Map(prev);
+      for (const [taskId, cacheEntry] of prev.entries()) {
+        if (!cacheEntry.usage) {
+          continue;
+        }
+        next.set(taskId, {
+          ...cacheEntry,
+          usage: normalizeUsage(cacheEntry.usage, remoteContextWindow),
+        });
+      }
+      return next;
+    });
+  }, [remoteContextWindow]);
+
+  useEffect(() => {
+    remoteOutputParserRef.current.setAgentPlugin(remoteActiveAgent?.plugin ?? remoteAgentName ?? 'claude');
+  }, [remoteActiveAgent?.plugin, remoteAgentName]);
 
   // Count running subagents for status indicator when panel is hidden
   const runningSubagentCount = useMemo(() => {
@@ -932,13 +1179,30 @@ export function RunApp({
       });
     }
 
+    const usageMap = isViewingRemote ? remoteTaskUsageMap : taskUsageMap;
+    sourceTasks = sourceTasks.map((task) => ({
+      ...task,
+      usage: usageMap.get(task.id),
+    }));
+
     const filtered = showClosedTasks ? sourceTasks : sourceTasks.filter((t) => t.status !== 'closed');
     return [...filtered].sort((a, b) => {
       const priorityA = statusPriority[a.status] ?? 10;
       const priorityB = statusPriority[b.status] ?? 10;
       return priorityA - priorityB;
     });
-  }, [tasks, remoteTasks, isViewingRemote, showClosedTasks, isParallelMode, parallelWorkers, parallelCompletedLocallyTaskIds, parallelMergedTaskIds]);
+  }, [
+    tasks,
+    remoteTasks,
+    isViewingRemote,
+    showClosedTasks,
+    isParallelMode,
+    parallelWorkers,
+    parallelCompletedLocallyTaskIds,
+    parallelMergedTaskIds,
+    taskUsageMap,
+    remoteTaskUsageMap,
+  ]);
 
   // Derive parallel execution status from worker states.
   // This allows restart gating to use actual worker completion state rather than stale local status.
@@ -1073,6 +1337,14 @@ export function RunApp({
       if (cancelled) return;
 
       if (result && result.success && result.output !== undefined) {
+        const contextWindow = await resolveModelContextWindow(remoteModel);
+        if (cancelled) return;
+        const fallbackUsage = summarizeTokenUsageFromOutput(result.output ?? '');
+        const usage = result.usage
+          ? normalizeUsage(result.usage, contextWindow)
+          : fallbackUsage
+            ? normalizeUsage(fallbackUsage, contextWindow)
+            : undefined;
         setRemoteIterationCache((prev) => {
           const next = new Map(prev);
           next.set(effectiveTaskId, {
@@ -1081,17 +1353,37 @@ export function RunApp({
             startedAt: result.startedAt,
             endedAt: result.endedAt,
             durationMs: result.durationMs,
+            usage,
             isRunning: result.isRunning ?? false,
           });
           return next;
         });
+        if (usage) {
+          setRemoteTaskUsageMap((prev) => {
+            const next = new Map(prev);
+            next.set(effectiveTaskId, usage);
+            return next;
+          });
+        }
       }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [isViewingRemote, instanceManager, viewMode, iterations, iterationSelectedIndex, displayedTasks, selectedIndex, remoteCurrentTaskId, remoteIterationCache]);
+  }, [
+    isViewingRemote,
+    instanceManager,
+    viewMode,
+    iterations,
+    iterationSelectedIndex,
+    displayedTasks,
+    selectedIndex,
+    remoteCurrentTaskId,
+    remoteIterationCache,
+    resolveModelContextWindow,
+    remoteModel,
+  ]);
 
   // Update output parser when agent changes (parser was created before config was loaded)
   useEffect(() => {
@@ -1120,6 +1412,7 @@ export function RunApp({
           // Clear current task info since we're not executing anymore
           setCurrentTaskId(undefined);
           setCurrentTaskTitle(undefined);
+          currentTaskIdRef.current = undefined;
           if (event.reason === 'error') {
             setStatus('error');
           } else if (event.reason === 'completed') {
@@ -1162,6 +1455,7 @@ export function RunApp({
           // Set current task info for display
           setCurrentTaskId(event.task.id);
           setCurrentTaskTitle(event.task.title);
+          currentTaskIdRef.current = event.task.id;
           // Capture the iteration start time for timing display
           setCurrentIterationStartedAt(event.timestamp);
           setStatus('executing');
@@ -1183,7 +1477,21 @@ export function RunApp({
           setCurrentTaskId(undefined);
           setCurrentTaskTitle(undefined);
           setCurrentIterationStartedAt(undefined);
+          currentTaskIdRef.current = undefined;
           setStatus('selecting');
+          {
+            const usage = event.result.usage;
+            if (usage) {
+              setTaskUsageMap((prev) => {
+                const next = new Map(prev);
+                next.set(
+                  event.result.task.id,
+                  normalizeUsage(usage, localContextWindowRef.current)
+                );
+                return next;
+              });
+            }
+          }
           if (event.result.taskCompleted) {
             // Update completed task status AND recalculate dependency status for all tasks
             // This ensures that tasks previously blocked by this one become actionable
@@ -1252,6 +1560,15 @@ export function RunApp({
             setCurrentOutput(outputParserRef.current.getOutput());
             // Also update segments for TUI-native color rendering
             setCurrentSegments(outputParserRef.current.getSegments());
+            const usage = outputParserRef.current.getUsage();
+            const taskId = event.taskId ?? currentTaskIdRef.current;
+            if (usage && taskId) {
+              setTaskUsageMap((prev) => {
+                const next = new Map(prev);
+                next.set(taskId, normalizeUsage(usage, localContextWindowRef.current));
+                return next;
+              });
+            }
           }
           // Always refresh subagent tree from engine (subagent events are processed in engine).
           // This decouples data collection from display preferences - the subagentDetailLevel
@@ -1338,6 +1655,28 @@ export function RunApp({
       outputParserRef.current.push(state.currentOutput);
       setCurrentOutput(outputParserRef.current.getOutput());
     }
+    const hydratedUsage = new Map<string, TokenUsageSummary>();
+    for (const iteration of state.iterations) {
+      const usageFromIteration =
+        iteration.usage ??
+        summarizeTokenUsageFromOutput(iteration.agentResult?.stdout ?? '');
+      if (usageFromIteration) {
+        hydratedUsage.set(
+          iteration.task.id,
+          normalizeUsage(usageFromIteration, localContextWindowRef.current)
+        );
+      }
+    }
+    if (state.currentTask?.id && state.currentOutput) {
+      const liveUsage = summarizeTokenUsageFromOutput(state.currentOutput);
+      if (liveUsage) {
+        hydratedUsage.set(
+          state.currentTask.id,
+          normalizeUsage(liveUsage, localContextWindowRef.current)
+        );
+      }
+    }
+    setTaskUsageMap(hydratedUsage);
     // Initialize active agent and rate limit state from engine
     if (state.activeAgent) {
       setActiveAgentState(state.activeAgent);
@@ -1346,6 +1685,14 @@ export function RunApp({
       setRateLimitState(state.rateLimitState);
     }
   }, [engine, agentName]);
+
+  useEffect(() => {
+    currentTaskIdRef.current = currentTaskId;
+  }, [currentTaskId]);
+
+  useEffect(() => {
+    remoteCurrentTaskIdRef.current = remoteCurrentTaskId;
+  }, [remoteCurrentTaskId]);
 
   // Sync task selection → agent tree selection
   // When currentTaskId changes, reset tree selection to the task root
@@ -2131,6 +2478,7 @@ export function RunApp({
           iteration: remoteCurrentIteration,
           output: remoteOutput || undefined,
           segments: undefined,
+          usage: effectiveTaskId ? remoteTaskUsageMap.get(effectiveTaskId) : undefined,
           timing,
         };
       }
@@ -2148,6 +2496,7 @@ export function RunApp({
           iteration: cached.iteration,
           output: cached.output,
           segments: undefined,
+          usage: cached.usage,
           timing,
         };
       }
@@ -2160,6 +2509,7 @@ export function RunApp({
         iteration: 0,
         output: undefined,
         segments: undefined,
+        usage: effectiveTaskId ? remoteTaskUsageMap.get(effectiveTaskId) : undefined,
         timing,
       };
     }
@@ -2180,6 +2530,7 @@ export function RunApp({
           iteration: 1,
           output,
           segments: [{ text: output }],
+          usage: summarizeTokenUsageFromOutput(output),
           timing: { isRunning },
         };
       }
@@ -2193,9 +2544,21 @@ export function RunApp({
           startedAt: currentIterationStartedAt,
           isRunning: true,
         };
-        return { iteration: currentIteration, output: currentOutput, segments: currentSegments, timing };
+        return {
+          iteration: currentIteration,
+          output: currentOutput,
+          segments: currentSegments,
+          usage: taskUsageMap.get(currentTaskId),
+          timing,
+        };
       }
-      return { iteration: currentIteration, output: undefined, segments: undefined, timing: undefined };
+      return {
+        iteration: currentIteration,
+        output: undefined,
+        segments: undefined,
+        usage: undefined,
+        timing: undefined,
+      };
     }
 
     // Check if this task is currently being executed
@@ -2214,7 +2577,13 @@ export function RunApp({
         startedAt: currentIterationStartedAt,
         isRunning: true,
       };
-      return { iteration: currentIteration, output: currentOutput, segments: currentSegments, timing };
+      return {
+        iteration: currentIteration,
+        output: currentOutput,
+        segments: currentSegments,
+        usage: taskUsageMap.get(effectiveTaskId),
+        timing,
+      };
     }
 
     // Look for a completed iteration for this task (in-memory from current session)
@@ -2230,6 +2599,7 @@ export function RunApp({
         iteration: taskIteration.iteration,
         output: taskIteration.agentResult?.stdout ?? '',
         segments: undefined, // Completed iterations don't have live segments
+        usage: taskIteration.usage,
         timing,
       };
     }
@@ -2243,13 +2613,43 @@ export function RunApp({
         iteration: -1, // Historical iteration number unknown, use -1 to indicate "past"
         output: historicalData.output,
         segments: undefined, // Historical data doesn't have segments
+        usage: historicalData.usage,
         timing: historicalData.timing,
       };
     }
 
     // Task hasn't been run yet (or historical log not yet loaded)
-    return { iteration: 0, output: undefined, segments: undefined, timing: undefined };
-  }, [effectiveTaskId, selectedTask, selectedIteration, viewMode, currentTaskId, currentIteration, currentOutput, currentSegments, iterations, historicalOutputCache, currentIterationStartedAt, isViewingRemote, remoteStatus, remoteCurrentIteration, remoteOutput, remoteIterationCache, remoteCurrentTaskId, isParallelMode, parallelTaskIdToWorkerId, parallelWorkerOutputs]);
+    return {
+      iteration: 0,
+      output: undefined,
+      segments: undefined,
+      usage: effectiveTaskId ? taskUsageMap.get(effectiveTaskId) : undefined,
+      timing: undefined,
+    };
+  }, [
+    effectiveTaskId,
+    selectedTask,
+    selectedIteration,
+    viewMode,
+    currentTaskId,
+    currentIteration,
+    currentOutput,
+    currentSegments,
+    iterations,
+    historicalOutputCache,
+    currentIterationStartedAt,
+    isViewingRemote,
+    remoteStatus,
+    remoteCurrentIteration,
+    remoteOutput,
+    remoteIterationCache,
+    remoteCurrentTaskId,
+    isParallelMode,
+    parallelTaskIdToWorkerId,
+    parallelWorkerOutputs,
+    taskUsageMap,
+    remoteTaskUsageMap,
+  ]);
 
   // Compute the actual output to display based on selectedSubagentId
   // When a subagent is selected (not task root), try to get its specific output
@@ -2455,44 +2855,71 @@ export function RunApp({
     if (!hasInCache) {
       // Load from disk asynchronously
       const taskId = effectiveTaskId;
-      getIterationLogsByTask(cwd, taskId).then((logs) => {
-        if (logs.length > 0) {
-          // Use the most recent log (last one)
-          const mostRecent = logs[logs.length - 1];
-          const timing: IterationTimingInfo = {
-            startedAt: mostRecent.metadata.startedAt,
-            endedAt: mostRecent.metadata.endedAt,
-            durationMs: mostRecent.metadata.durationMs,
-            isRunning: false,
-          };
-          setHistoricalOutputCache((prev) => {
-            const next = new Map(prev);
-            next.set(taskId, {
-              output: mostRecent.stdout,
-              timing,
-              agentPlugin: mostRecent.metadata.agentPlugin,
-              model: mostRecent.metadata.model,
+      void (async () => {
+        try {
+          const logs = await getIterationLogsByTask(cwd, taskId);
+          if (logs.length > 0) {
+            // Use the most recent log (last one)
+            const mostRecent = logs[logs.length - 1];
+            const timing: IterationTimingInfo = {
+              startedAt: mostRecent.metadata.startedAt,
+              endedAt: mostRecent.metadata.endedAt,
+              durationMs: mostRecent.metadata.durationMs,
+              isRunning: false,
+            };
+            const contextWindow = await resolveModelContextWindow(mostRecent.metadata.model);
+            const fallbackUsage = summarizeTokenUsageFromOutput(mostRecent.stdout);
+            const usage = mostRecent.metadata.usage
+              ? normalizeUsage(mostRecent.metadata.usage, contextWindow)
+              : fallbackUsage
+                ? normalizeUsage(fallbackUsage, contextWindow)
+                : undefined;
+
+            setHistoricalOutputCache((prev) => {
+              const next = new Map(prev);
+              next.set(taskId, {
+                output: mostRecent.stdout,
+                timing,
+                usage,
+                agentPlugin: mostRecent.metadata.agentPlugin,
+                model: mostRecent.metadata.model,
+              });
+              return next;
             });
-            return next;
-          });
-        } else {
-          // No logs found - mark as empty output with no timing to avoid repeated lookups
+
+            if (usage) {
+              setTaskUsageMap((prev) => {
+                const next = new Map(prev);
+                next.set(taskId, usage);
+                return next;
+              });
+            }
+          } else {
+            // No logs found - mark as empty output with no timing to avoid repeated lookups
+            setHistoricalOutputCache((prev) => {
+              const next = new Map(prev);
+              next.set(taskId, { output: '', timing: {} });
+              return next;
+            });
+          }
+        } catch {
+          // On error, mark as empty to avoid repeated failed lookups
           setHistoricalOutputCache((prev) => {
             const next = new Map(prev);
             next.set(taskId, { output: '', timing: {} });
             return next;
           });
         }
-      }).catch(() => {
-        // On error, mark as empty to avoid repeated failed lookups
-        setHistoricalOutputCache((prev) => {
-          const next = new Map(prev);
-          next.set(taskId, { output: '', timing: {} });
-          return next;
-        });
-      });
+      })();
     }
-  }, [effectiveTaskId, selectedTask, selectedIteration, cwd, historicalOutputCache]);
+  }, [
+    effectiveTaskId,
+    selectedTask,
+    selectedIteration,
+    cwd,
+    historicalOutputCache,
+    resolveModelContextWindow,
+  ]);
 
   // Lazy load subagent trace data and historic context when viewing iteration details
   useEffect(() => {
@@ -2744,6 +3171,7 @@ export function RunApp({
               currentIteration={selectedTaskIteration.iteration}
               iterationOutput={displayIterationOutput}
               iterationSegments={selectedTaskIteration.segments}
+              taskUsage={selectedTaskIteration.usage}
               viewMode={detailsViewMode}
               iterationTiming={selectedTaskIteration.timing}
               agentName={displayAgentInfo.agent}
@@ -2784,6 +3212,7 @@ export function RunApp({
               currentIteration={selectedTaskIteration.iteration}
               iterationOutput={displayIterationOutput}
               iterationSegments={selectedTaskIteration.segments}
+              taskUsage={selectedTaskIteration.usage}
               viewMode={detailsViewMode}
               iterationTiming={selectedTaskIteration.timing}
               agentName={displayAgentInfo.agent}

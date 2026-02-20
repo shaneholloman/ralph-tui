@@ -6,6 +6,7 @@
 import type { TrackerTask } from '../plugins/trackers/types.js';
 import type { AgentExecutionResult } from '../plugins/agents/types.js';
 import type { SubagentState as ParserSubagentState } from '../plugins/agents/tracing/types.js';
+import type { TokenUsageSummary } from '../plugins/agents/usage.js';
 
 /**
  * Reason why an agent is currently active.
@@ -176,6 +177,9 @@ export interface IterationResult {
 
   /** Duration of the iteration in milliseconds */
   durationMs: number;
+
+  /** Token usage summary extracted from agent output (if available) */
+  usage?: TokenUsageSummary;
 
   /** Error message if failed */
   error?: string;
@@ -511,6 +515,8 @@ export interface AgentOutputEvent extends EngineEventBase {
   stream: 'stdout' | 'stderr';
   /** Output data */
   data: string;
+  /** Task that emitted this output (if available) */
+  taskId?: string;
   /** Iteration number */
   iteration: number;
 }

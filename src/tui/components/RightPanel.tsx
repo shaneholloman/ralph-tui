@@ -598,6 +598,84 @@ function TimingSummary({ timing }: { timing?: IterationTimingInfo }): ReactNode 
   );
 }
 
+function formatTokenNumber(tokens: number): string {
+  return tokens.toLocaleString();
+}
+
+/**
+ * Token/context usage summary for the current task output.
+ */
+function UsageSummary({
+  usage,
+}: {
+  usage?: RightPanelProps['taskUsage'];
+}): ReactNode {
+  if (!usage) {
+    return (
+      <box
+        style={{
+          marginBottom: 1,
+          padding: 1,
+          border: true,
+          borderColor: colors.border.muted,
+          backgroundColor: colors.bg.tertiary,
+        }}
+      >
+        <text fg={colors.fg.muted}>Usage: unavailable</text>
+      </box>
+    );
+  }
+
+  const inputTokens = usage.inputTokens ?? 0;
+  const outputTokens = usage.outputTokens ?? 0;
+  const totalTokens =
+    usage.totalTokens > 0 ? usage.totalTokens : inputTokens + outputTokens;
+  const remainingTokens = usage.remainingContextTokens;
+  const contextWindow = usage.contextWindowTokens;
+  const remainingPercent = usage.remainingContextPercent;
+
+  return (
+    <box
+      style={{
+        marginBottom: 1,
+        padding: 1,
+        border: true,
+        borderColor: colors.border.muted,
+        backgroundColor: colors.bg.tertiary,
+        flexDirection: 'column',
+      }}
+    >
+      <box style={{ flexDirection: 'row', marginBottom: 1 }}>
+        <text fg={colors.fg.muted}>Context: </text>
+        {remainingPercent !== undefined ? (
+          <text fg={colors.accent.primary}>
+            {remainingPercent.toFixed(1)}% remaining
+          </text>
+        ) : (
+          <text fg={colors.fg.secondary}>remaining unknown</text>
+        )}
+        {remainingTokens !== undefined && contextWindow !== undefined && (
+          <text fg={colors.fg.secondary}>
+            {' '}
+            ({formatTokenNumber(remainingTokens)} / {formatTokenNumber(contextWindow)} tokens)
+          </text>
+        )}
+      </box>
+      <box style={{ flexDirection: 'row', gap: 3 }}>
+        <text fg={colors.fg.muted}>
+          Input: <span fg={colors.fg.secondary}>{formatTokenNumber(inputTokens)}</span>
+        </text>
+        <text fg={colors.fg.muted}>
+          Output: <span fg={colors.fg.secondary}>{formatTokenNumber(outputTokens)}</span>
+        </text>
+        <text fg={colors.fg.muted}>
+          Total: <span fg={colors.accent.primary}>{formatTokenNumber(totalTokens)}</span>
+        </text>
+      </box>
+    </box>
+  );
+}
+
 /**
  * Prompt preview view - shows the full rendered prompt that will be sent to the agent.
  * Displays the template source indicator and scrollable prompt content.
@@ -717,6 +795,7 @@ function TaskOutputView({
   iterationOutput,
   iterationSegments,
   iterationTiming,
+  taskUsage,
   agentName,
   currentModel,
 }: {
@@ -725,6 +804,7 @@ function TaskOutputView({
   iterationOutput?: string;
   iterationSegments?: FormattedSegment[];
   iterationTiming?: IterationTimingInfo;
+  taskUsage?: RightPanelProps['taskUsage'];
   agentName?: string;
   currentModel?: string;
 }): ReactNode {
@@ -785,6 +865,7 @@ function TaskOutputView({
 
       {/* Timing summary - shows start/end/duration */}
       <TimingSummary timing={iterationTiming} />
+      <UsageSummary usage={taskUsage} />
 
       {/* Full-height iteration output */}
       <box
@@ -848,6 +929,7 @@ function TaskDetails({
   iterationSegments,
   viewMode = 'details',
   iterationTiming,
+  taskUsage,
   agentName,
   currentModel,
   promptPreview,
@@ -859,6 +941,7 @@ function TaskDetails({
   iterationSegments?: FormattedSegment[];
   viewMode?: DetailsViewMode;
   iterationTiming?: IterationTimingInfo;
+  taskUsage?: RightPanelProps['taskUsage'];
   agentName?: string;
   currentModel?: string;
   promptPreview?: string;
@@ -872,6 +955,7 @@ function TaskDetails({
         iterationOutput={iterationOutput}
         iterationSegments={iterationSegments}
         iterationTiming={iterationTiming}
+        taskUsage={taskUsage}
         agentName={agentName}
         currentModel={currentModel}
       />
@@ -899,6 +983,7 @@ export function RightPanel({
   currentIteration,
   iterationOutput,
   iterationSegments,
+  taskUsage,
   viewMode = 'details',
   iterationTiming,
   agentName,
@@ -939,6 +1024,7 @@ export function RightPanel({
           iterationSegments={iterationSegments}
           viewMode={viewMode}
           iterationTiming={iterationTiming}
+          taskUsage={taskUsage}
           agentName={agentName}
           currentModel={currentModel}
           promptPreview={promptPreview}

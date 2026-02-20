@@ -48,6 +48,7 @@ import {
   isOpenCodeTaskTool,
   openCodeTaskToClaudeMessages,
 } from '../plugins/agents/opencode/outputParser.js';
+import { summarizeTokenUsageFromOutput } from '../plugins/agents/usage.js';
 import { updateSessionIteration, updateSessionStatus, updateSessionMaxIterations } from '../session/index.js';
 import { saveIterationLog, buildSubagentTrace, getRecentProgressSummary, getCodebasePatternsForPrompt } from '../logs/index.js';
 import { performAutoCommit } from './auto-commit.js';
@@ -1112,6 +1113,7 @@ export class ExecutionEngine {
             timestamp: new Date().toISOString(),
             stream: 'stdout',
             data,
+            taskId: task.id,
             iteration,
           });
 
@@ -1145,6 +1147,7 @@ export class ExecutionEngine {
             timestamp: new Date().toISOString(),
             stream: 'stderr',
             data,
+            taskId: task.id,
             iteration,
           });
         },
@@ -1304,6 +1307,7 @@ export class ExecutionEngine {
         taskCompleted,
         promiseComplete,
         durationMs,
+        usage: summarizeTokenUsageFromOutput(agentResult.stdout),
         startedAt: startedAt.toISOString(),
         endedAt: endedAt.toISOString(),
       };

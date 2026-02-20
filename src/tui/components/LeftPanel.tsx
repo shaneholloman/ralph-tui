@@ -18,6 +18,37 @@ function truncateText(text: string, maxWidth: number): string {
   return text.slice(0, maxWidth - 1) + '…';
 }
 
+function formatTokenCount(tokens: number): string {
+  if (tokens >= 1_000_000) {
+    return `${(tokens / 1_000_000).toFixed(1).replace(/\.0$/, '')}m`;
+  }
+  if (tokens >= 1_000) {
+    return `${(tokens / 1_000).toFixed(1).replace(/\.0$/, '')}k`;
+  }
+  return String(tokens);
+}
+
+/**
+ * Compact usage indicator for task list rows.
+ * Format: "c62% t15k" (context remaining + total tokens).
+ */
+function formatTaskUsageIndicator(task: TaskItem): string {
+  const usage = task.usage;
+  if (!usage) {
+    return 'c-- t0';
+  }
+
+  const totalTokens =
+    usage.totalTokens > 0
+      ? usage.totalTokens
+      : usage.inputTokens + usage.outputTokens;
+  const contextPercent = usage.remainingContextPercent;
+  const contextDisplay =
+    contextPercent !== undefined ? `${Math.round(contextPercent)}%` : '--';
+
+  return `c${contextDisplay} t${formatTokenCount(totalTokens)}`;
+}
+
 /**
  * Single task item row
  * Shows: [indent][status indicator] [task ID] [task title (truncated)]
@@ -45,10 +76,13 @@ function TaskRow({
   const indent = '  '.repeat(indentLevel);
 
   // Format: "[indent]✓ task-id title"
-  // Calculate available width: maxWidth - indent - indicator(1) - space(1) - id - space(1)
+  // Calculate available width:
+  // maxWidth - indent - indicator(1) - space(1) - id - space(1) - usageIndicator - space(1)
   const idDisplay = task.id;
   const indentWidth = indentLevel * 2;
-  const titleWidth = maxWidth - indentWidth - 3 - idDisplay.length;
+  const usageIndicator = formatTaskUsageIndicator(task);
+  const usageIndicatorWidth = usageIndicator.length + 1;
+  const titleWidth = maxWidth - indentWidth - 3 - idDisplay.length - usageIndicatorWidth;
   const truncatedTitle = truncateText(task.title, Math.max(5, titleWidth));
 
   // Greyed-out colors for closed tasks
@@ -74,6 +108,7 @@ function TaskRow({
         <span fg={statusColor}>{statusIndicator}</span>
         <span fg={idColor}> {idDisplay}</span>
         <span fg={titleColor}> {truncatedTitle}</span>
+        <span fg={colors.fg.dim}> {usageIndicator}</span>
       </text>
     </box>
   );
