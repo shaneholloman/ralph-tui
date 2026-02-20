@@ -749,7 +749,7 @@ export class RemoteServer {
       // Include config info for remote TUI display
       agentName: this.options.agentName,
       trackerName: this.options.trackerName,
-      currentModel: this.options.currentModel,
+      currentModel: engineState.currentModel ?? this.options.currentModel,
       // Include subagent tree for TUI rendering
       subagentTree: this.options.engine.getSubagentTree(),
       // Include config settings for TUI display

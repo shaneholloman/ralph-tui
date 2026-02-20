@@ -677,6 +677,8 @@ export function RunApp({
   const [activeAgentState, setActiveAgentState] = useState<ActiveAgentState | null>(null);
   // Rate limit state from engine - tracks primary agent rate limiting
   const [rateLimitState, setRateLimitState] = useState<RateLimitState | null>(null);
+  // Runtime-detected model from agent telemetry (falls back to configured model when unavailable)
+  const [detectedModel, setDetectedModel] = useState<string | undefined>(currentModel);
 
   // Remote viewing state
   const isViewingRemote = selectedTabIndex > 0;
@@ -797,9 +799,7 @@ export function RunApp({
         if (state.trackerName) {
           setRemoteTrackerName(state.trackerName);
         }
-        if (state.currentModel) {
-          setRemoteModel(state.currentModel);
-        }
+        setRemoteModel(state.currentModel);
         // Capture auto-commit setting for status display
         if (state.autoCommit !== undefined) {
           setRemoteAutoCommit(state.autoCommit);
@@ -924,6 +924,9 @@ export function RunApp({
             }
           }
           break;
+        case 'agent:model':
+          setRemoteModel(event.model);
+          break;
         case 'iteration:completed':
           {
             const usage = event.result.usage;
@@ -1017,10 +1020,11 @@ export function RunApp({
   const displayAgentName = !isViewingRemote && agentCommand && agentCommand !== baseAgentName
     ? `${baseAgentName} (${agentCommand})`
     : baseAgentName;
+  const localModel = detectedModel ?? currentModel;
 
   // Compute display tracker and model for local vs remote
   const displayTrackerName = isViewingRemote ? (remoteTrackerName ?? trackerName) : trackerName;
-  const displayModel = isViewingRemote ? (remoteModel ?? currentModel) : currentModel;
+  const displayModel = isViewingRemote ? (remoteModel ?? currentModel) : localModel;
 
   // Resolve model context windows for live local/remote usage indicators.
   const modelContextCacheRef = useRef<Map<string, number | null>>(new Map());
@@ -1083,7 +1087,7 @@ export function RunApp({
   useEffect(() => {
     let cancelled = false;
     void resolveModelContextWindow(
-      currentModel,
+      localModel,
       activeAgentState?.plugin ?? resolvedAgentName
     ).then((contextWindow) => {
       if (!cancelled) {
@@ -1094,7 +1098,7 @@ export function RunApp({
     return () => {
       cancelled = true;
     };
-  }, [currentModel, activeAgentState?.plugin, resolvedAgentName, resolveModelContextWindow]);
+  }, [localModel, activeAgentState?.plugin, resolvedAgentName, resolveModelContextWindow]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1688,6 +1692,9 @@ export function RunApp({
             }
           }
           break;
+        case 'agent:model':
+          setDetectedModel(event.model);
+          break;
 
         case 'agent:switched':
           // Agent was switched (primary to fallback or recovery)
@@ -1796,6 +1803,9 @@ export function RunApp({
     }
     if (state.rateLimitState) {
       setRateLimitState(state.rateLimitState);
+    }
+    if (state.currentModel) {
+      setDetectedModel(state.currentModel);
     }
   }, [engine, agentName]);
 
@@ -2919,12 +2929,12 @@ export function RunApp({
   const displayAgentInfo = useMemo(() => {
     // If this is the currently executing task, use current agent/model
     if (effectiveTaskId && currentTaskId === effectiveTaskId) {
-      return { agent: displayAgentName, model: currentModel };
+      return { agent: displayAgentName, model: displayModel };
     }
 
     // If viewing a running iteration, use current values
     if (selectedIteration?.status === 'running') {
-      return { agent: displayAgentName, model: currentModel };
+      return { agent: displayAgentName, model: displayModel };
     }
 
     // For completed tasks/iterations, check historical cache using the unified task ID
@@ -2936,8 +2946,8 @@ export function RunApp({
     }
 
     // Fall back to current values
-    return { agent: displayAgentName, model: currentModel };
-  }, [effectiveTaskId, selectedIteration, currentTaskId, displayAgentName, currentModel, historicalOutputCache]);
+    return { agent: displayAgentName, model: displayModel };
+  }, [effectiveTaskId, selectedIteration, currentTaskId, displayAgentName, displayModel, historicalOutputCache]);
 
   // Load historical iteration logs from disk when a task is selected.
   // This populates the cache so output is available even on session resume

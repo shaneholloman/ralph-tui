@@ -216,6 +216,7 @@ export type EngineEventType =
   | 'task:auto-commit-skipped'
   | 'agent:output'
   | 'agent:usage'
+  | 'agent:model'
   | 'agent:switched'
   | 'agent:all-limited'
   | 'agent:recovery-attempted'
@@ -537,6 +538,20 @@ export interface AgentUsageEvent extends EngineEventBase {
 }
 
 /**
+ * Agent model event (streaming).
+ * Emitted when the engine detects the effective model from agent JSONL telemetry.
+ */
+export interface AgentModelEvent extends EngineEventBase {
+  type: 'agent:model';
+  /** Task that emitted this model update (if available) */
+  taskId?: string;
+  /** Iteration number */
+  iteration: number;
+  /** Detected model identifier (may be provider/model or shorthand) */
+  model: string;
+}
+
+/**
  * Agent switched event - emitted when the engine switches between primary and fallback agents.
  */
 export interface AgentSwitchedEvent extends EngineEventBase {
@@ -628,6 +643,7 @@ export type EngineEvent =
   | TaskAutoCommitSkippedEvent
   | AgentOutputEvent
   | AgentUsageEvent
+  | AgentModelEvent
   | AgentSwitchedEvent
   | AllAgentsLimitedEvent
   | AgentRecoveryAttemptedEvent
@@ -679,6 +695,9 @@ export interface EngineState {
 
   /** Current iteration stderr buffer */
   currentStderr: string;
+
+  /** Current effective model (configured or detected from runtime telemetry) */
+  currentModel?: string;
 
   /**
    * Subagents tracked during the current iteration.

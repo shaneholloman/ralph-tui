@@ -49,6 +49,7 @@ import {
   openCodeTaskToClaudeMessages,
 } from '../plugins/agents/opencode/outputParser.js';
 import {
+  extractModelFromJsonObject,
   extractTokenUsageFromJsonObject,
   summarizeTokenUsageFromOutput,
   TokenUsageAccumulator,
@@ -254,6 +255,7 @@ export class ExecutionEngine {
       startedAt: null,
       currentOutput: '',
       currentStderr: '',
+      currentModel: config.model,
       subagents: new Map(),
       activeAgent: null,
       rateLimitState: null,
@@ -1073,6 +1075,18 @@ export class ExecutionEngine {
         // Callback for pre-parsed JSONL messages (used by Claude and OpenCode plugins)
         // This receives raw JSON objects directly from the agent's parsed JSONL output.
         onJsonlMessage: (message: Record<string, unknown>) => {
+          const detectedModel = extractModelFromJsonObject(message);
+          if (detectedModel && detectedModel !== this.state.currentModel) {
+            this.state.currentModel = detectedModel;
+            this.emit({
+              type: 'agent:model',
+              timestamp: new Date().toISOString(),
+              taskId: task.id,
+              iteration,
+              model: detectedModel,
+            });
+          }
+
           const usageSample = extractTokenUsageFromJsonObject(message);
           if (usageSample) {
             iterationUsageAccumulator.add(usageSample);
@@ -1345,7 +1359,10 @@ export class ExecutionEngine {
       const completionSummary = this.buildCompletionSummary(result);
 
       await saveIterationLog(this.config.cwd, result, agentResult.stdout, agentResult.stderr ?? this.state.currentStderr, {
-        config: this.config,
+        config: {
+          ...this.config,
+          model: this.state.currentModel ?? this.config.model,
+        },
         sessionId: this.config.sessionId,
         subagentTrace,
         agentSwitches: this.currentIterationAgentSwitches.length > 0 ? [...this.currentIterationAgentSwitches] : undefined,

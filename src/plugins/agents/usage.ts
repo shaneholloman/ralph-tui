@@ -108,6 +108,31 @@ const USAGE_NESTED_KEYS = [
   'raw',
 ] as const;
 
+const MODEL_VALUE_KEYS = [
+  'model',
+  'model_slug',
+  'modelSlug',
+  'model_name',
+  'modelName',
+  'model_id',
+  'modelId',
+  'selected_model',
+  'selectedModel',
+  'current_model',
+  'currentModel',
+  'assistant_model',
+  'assistantModel',
+] as const;
+
+const MODEL_PROVIDER_KEYS = [
+  'provider',
+  'provider_name',
+  'providerName',
+  'provider_id',
+  'providerId',
+  'vendor',
+] as const;
+
 function asRecord(value: unknown): JsonRecord | null {
   if (typeof value === 'object' && value !== null) {
     return value as JsonRecord;
@@ -136,6 +161,28 @@ function readFirstNumber(record: JsonRecord, keys: readonly string[]): number | 
     }
   }
   return undefined;
+}
+
+function readFirstString(record: JsonRecord, keys: readonly string[]): string | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim();
+    }
+  }
+  return undefined;
+}
+
+function normalizeModelString(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > 200) {
+    return undefined;
+  }
+  // Keep model values conservative to avoid picking tool names or random prose.
+  if (!/^[A-Za-z0-9._/-]+$/.test(trimmed)) {
+    return undefined;
+  }
+  return trimmed;
 }
 
 function normalizePercent(value?: number): number | undefined {
@@ -204,6 +251,77 @@ function collectUsageRecords(value: unknown, out: JsonRecord[], depth: number): 
   if (record.parts !== undefined) {
     collectUsageRecords(record.parts, out, depth + 1);
   }
+}
+
+function scoreDetectedModel(model: string): number {
+  let score = model.includes('/') ? 5 : 0;
+  if (model.includes('claude') || model.includes('gpt') || model.includes('gemini')) {
+    score += 3;
+  }
+  if (model.length >= 8) {
+    score += 1;
+  }
+  return score;
+}
+
+/**
+ * Extract model identifier from a parsed JSON object.
+ * Best-effort scan over nested payload fields commonly emitted by agent CLIs.
+ */
+export function extractModelFromJsonObject(payload: JsonRecord): string | undefined {
+  const queue: Array<{ value: unknown; depth: number }> = [{ value: payload, depth: 0 }];
+  let bestMatch: string | undefined;
+  let bestScore = -1;
+
+  while (queue.length > 0) {
+    const next = queue.shift();
+    if (!next) {
+      continue;
+    }
+
+    const { value, depth } = next;
+    if (depth > 4) {
+      continue;
+    }
+
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        queue.push({ value: item, depth: depth + 1 });
+      }
+      continue;
+    }
+
+    const record = asRecord(value);
+    if (!record) {
+      continue;
+    }
+
+    const modelValue = readFirstString(record, MODEL_VALUE_KEYS);
+    if (modelValue) {
+      const normalizedModel = normalizeModelString(modelValue);
+      if (normalizedModel) {
+        const provider = readFirstString(record, MODEL_PROVIDER_KEYS);
+        const normalizedProvider = provider ? normalizeModelString(provider) : undefined;
+        const candidate =
+          normalizedProvider && !normalizedModel.includes('/')
+            ? `${normalizedProvider}/${normalizedModel}`
+            : normalizedModel;
+        const score = scoreDetectedModel(candidate);
+        if (score > bestScore) {
+          bestMatch = candidate;
+          bestScore = score;
+        }
+      }
+    }
+
+    for (const nestedValue of Object.values(record)) {
+      if (nestedValue && typeof nestedValue === 'object') {
+        queue.push({ value: nestedValue, depth: depth + 1 });
+      }
+    }
+  }
+
+  return bestMatch;
 }
 
 function parseUsageRecord(record: JsonRecord): TokenUsageSample | undefined {
@@ -429,4 +547,3 @@ export function withContextWindow(
     contextWindowTokens: fallbackContextWindowTokens,
   });
 }
-

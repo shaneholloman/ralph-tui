@@ -5,6 +5,7 @@
 
 import { describe, expect, test } from 'bun:test';
 import {
+  extractModelFromJsonObject,
   extractTokenUsageFromJsonLine,
   summarizeTokenUsageFromOutput,
   withContextWindow,
@@ -76,3 +77,26 @@ describe('summarizeTokenUsageFromOutput', () => {
   });
 });
 
+describe('extractModelFromJsonObject', () => {
+  test('extracts provider/model from nested payload', () => {
+    const model = extractModelFromJsonObject({
+      type: 'turn.completed',
+      result: {
+        provider: 'anthropic',
+        model: 'claude-3-7-sonnet-20250219',
+      },
+    });
+
+    expect(model).toBe('anthropic/claude-3-7-sonnet-20250219');
+  });
+
+  test('extracts plain model when provider is absent', () => {
+    const model = extractModelFromJsonObject({
+      event: {
+        model_name: 'gpt-5',
+      },
+    });
+
+    expect(model).toBe('gpt-5');
+  });
+});
