@@ -380,12 +380,6 @@ export class BeadsRustTrackerPlugin extends BaseTrackerPlugin {
 
     let tasks = tasksJson.map(brTaskToTask);
 
-    // Enrich tasks with dependency data from br dep list.
-    // br list --json only includes dependency_count/dependent_count but not
-    // the actual dependency IDs. Without this enrichment, the parallel executor's
-    // task graph sees all tasks as independent and dispatches them simultaneously.
-    await this.enrichDependencies(tasks, tasksJson);
-
     // Filter by parent (br list doesn't support --parent)
     // Always apply filter when parentId is set - empty childIds means no matching tasks
     if (parentId) {
@@ -400,6 +394,10 @@ export class BeadsRustTrackerPlugin extends BaseTrackerPlugin {
         : undefined
       : filter;
     tasks = this.filterTasks(tasks, filterWithoutParent);
+
+    // Enrich dependencies after all filtering so we only query tasks that will
+    // actually be used by the executor.
+    await this.enrichDependencies(tasks, tasksJson);
 
     return tasks;
   }
@@ -499,36 +497,48 @@ export class BeadsRustTrackerPlugin extends BaseTrackerPlugin {
       }
     }
 
-    // Fetch dependency details for tasks that have them
-    const enrichPromises = tasks
-      .filter((t) => depCountMap.has(t.id))
-      .map(async (task) => {
-        const { stdout, exitCode } = await execBr(
-          ['dep', 'list', task.id, '--json'],
-          this.workingDir
-        );
+    const tasksToEnrich = tasks.filter((t) => depCountMap.has(t.id));
+    if (tasksToEnrich.length === 0) {
+      return;
+    }
 
-        if (exitCode !== 0) return;
+    // Limit concurrency to avoid spawning too many br subprocesses at once on
+    // large task sets.
+    const maxConcurrentEnrichCalls = 8;
 
-        try {
-          const deps = JSON.parse(stdout) as BrDepListItem[];
-          const dependsOn: string[] = [];
+    for (let i = 0; i < tasksToEnrich.length; i += maxConcurrentEnrichCalls) {
+      const batch = tasksToEnrich.slice(i, i + maxConcurrentEnrichCalls);
+      await Promise.all(batch.map((task) => this.enrichTaskDependencies(task)));
+    }
+  }
 
-          for (const dep of deps) {
-            if (dep.type === 'blocks') {
-              dependsOn.push(dep.depends_on_id);
-            }
-          }
+  /**
+   * Populate dependsOn for a single task from br dep list output.
+   */
+  private async enrichTaskDependencies(task: TrackerTask): Promise<void> {
+    const { stdout, exitCode } = await execBr(
+      ['dep', 'list', task.id, '--json'],
+      this.workingDir
+    );
 
-          if (dependsOn.length > 0) {
-            task.dependsOn = dependsOn;
-          }
-        } catch {
-          // Silently skip enrichment failures — falls back to no-dep behavior
+    if (exitCode !== 0) return;
+
+    try {
+      const deps = JSON.parse(stdout) as BrDepListItem[];
+      const dependsOn: string[] = [];
+
+      for (const dep of deps) {
+        if (dep.type === 'blocks') {
+          dependsOn.push(dep.depends_on_id);
         }
-      });
+      }
 
-    await Promise.all(enrichPromises);
+      if (dependsOn.length > 0) {
+        task.dependsOn = dependsOn;
+      }
+    } catch {
+      // Silently skip enrichment failures — falls back to no-dep behavior
+    }
   }
 
   /**

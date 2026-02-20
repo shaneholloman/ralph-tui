@@ -21,8 +21,16 @@ let mockReadFileShouldFail = false;
 let mockReadFileContent = '';
 let mockReadFilePaths: string[] = [];
 
-type MockSpawnResponse = { exitCode: number; stdout?: string; stderr?: string };
+type MockSpawnResponse = {
+  exitCode: number;
+  stdout?: string;
+  stderr?: string;
+  delayMs?: number;
+};
 let mockSpawnResponses: MockSpawnResponse[] = [];
+let trackEnrichmentDepConcurrency = false;
+let activeEnrichmentDepCalls = 0;
+let maxEnrichmentDepCalls = 0;
 
 function createMockChildProcess(response?: MockSpawnResponse) {
   const proc = new EventEmitter() as EventEmitter & {
@@ -35,12 +43,13 @@ function createMockChildProcess(response?: MockSpawnResponse) {
   const stdout = response?.stdout ?? mockSpawnStdout;
   const stderr = response?.stderr ?? mockSpawnStderr;
   const exitCode = response?.exitCode ?? mockSpawnExitCode;
+  const delayMs = response?.delayMs ?? 0;
 
   setTimeout(() => {
     if (stdout) proc.stdout.emit('data', Buffer.from(stdout));
     if (stderr) proc.stderr.emit('data', Buffer.from(stderr));
     proc.emit('close', exitCode);
-  }, 0);
+  }, delayMs);
 
   return proc;
 }
@@ -55,7 +64,26 @@ describe('BeadsRustTrackerPlugin', () => {
       spawn: (cmd: string, args: string[]) => {
         mockSpawnArgs.push({ cmd, args });
         const response = mockSpawnResponses.shift();
-        return createMockChildProcess(response);
+        const isEnrichmentDepList =
+          args[0] === 'dep' &&
+          args[1] === 'list' &&
+          !args.includes('--direction');
+
+        if (trackEnrichmentDepConcurrency && isEnrichmentDepList) {
+          activeEnrichmentDepCalls++;
+          if (activeEnrichmentDepCalls > maxEnrichmentDepCalls) {
+            maxEnrichmentDepCalls = activeEnrichmentDepCalls;
+          }
+        }
+
+        const proc = createMockChildProcess(response);
+        if (trackEnrichmentDepConcurrency && isEnrichmentDepList) {
+          proc.once('close', () => {
+            activeEnrichmentDepCalls = Math.max(0, activeEnrichmentDepCalls - 1);
+          });
+        }
+
+        return proc;
       },
     }));
 
@@ -108,6 +136,9 @@ describe('BeadsRustTrackerPlugin', () => {
     mockReadFileShouldFail = false;
     mockReadFileContent = '';
     mockReadFilePaths = [];
+    trackEnrichmentDepConcurrency = false;
+    activeEnrichmentDepCalls = 0;
+    maxEnrichmentDepCalls = 0;
   });
 
   test('reports unavailable when .beads directory is missing', async () => {
@@ -432,6 +463,83 @@ describe('BeadsRustTrackerPlugin', () => {
 
       expect(tasks[0]?.status).toBe('completed');
       expect(tasks[0]?.priority).toBe(4);
+    });
+
+    test('enriches dependencies only for tasks that remain after parent filtering', async () => {
+      mockSpawnResponses = [
+        { exitCode: 0, stdout: 'br version 0.4.1\n' },
+        {
+          exitCode: 0,
+          stdout: JSON.stringify([
+            { id: 'epic.1', title: 'Child', status: 'open', priority: 0, dependency_count: 1 },
+            { id: 'other.1', title: 'Other', status: 'open', priority: 0, dependency_count: 1 },
+          ]),
+        },
+        {
+          exitCode: 0,
+          stdout: JSON.stringify([
+            { issue_id: 'epic.1', depends_on_id: 'epic', type: 'parent-child', title: 'Child', status: 'open', priority: 0 },
+          ]),
+        },
+        {
+          exitCode: 0,
+          stdout: JSON.stringify([
+            { issue_id: 'epic.1', depends_on_id: 'dep-1', type: 'blocks', title: 'Dependency', status: 'open', priority: 0 },
+          ]),
+        },
+      ];
+
+      const plugin = new BeadsRustTrackerPlugin();
+      await plugin.initialize({ workingDir: '/test' });
+      mockSpawnArgs = [];
+
+      const tasks = await plugin.getTasks({ parentId: 'epic' });
+
+      expect(tasks.length).toBe(1);
+      expect(tasks[0]?.id).toBe('epic.1');
+      expect(tasks[0]?.dependsOn).toEqual(['dep-1']);
+
+      expect(mockSpawnArgs.map((c) => c.args)).toEqual([
+        ['list', '--json', '--all', '--limit', '0'],
+        ['dep', 'list', 'epic', '--direction', 'up', '--json'],
+        ['dep', 'list', 'epic.1', '--json'],
+      ]);
+    });
+
+    test('limits concurrent dependency enrichment calls to avoid process fan-out', async () => {
+      const taskCount = 18;
+      const listOutput = Array.from({ length: taskCount }, (_, i) => ({
+        id: `t${i + 1}`,
+        title: `Task ${i + 1}`,
+        status: 'open',
+        priority: 2,
+        dependency_count: 1,
+      }));
+
+      mockSpawnResponses = [
+        { exitCode: 0, stdout: 'br version 0.4.1\n' },
+        { exitCode: 0, stdout: JSON.stringify(listOutput) },
+        ...Array.from({ length: taskCount }, () => ({
+          exitCode: 0,
+          stdout: JSON.stringify([]),
+          delayMs: 2,
+        })),
+      ];
+
+      const plugin = new BeadsRustTrackerPlugin();
+      await plugin.initialize({ workingDir: '/test' });
+      mockSpawnArgs = [];
+      trackEnrichmentDepConcurrency = true;
+
+      const tasks = await plugin.getTasks();
+
+      const depEnrichmentCalls = mockSpawnArgs.filter(
+        (c) => c.args[0] === 'dep' && c.args[1] === 'list' && !c.args.includes('--direction')
+      );
+
+      expect(tasks.length).toBe(taskCount);
+      expect(depEnrichmentCalls.length).toBe(taskCount);
+      expect(maxEnrichmentDepCalls).toBeLessThanOrEqual(8);
     });
   });
 
