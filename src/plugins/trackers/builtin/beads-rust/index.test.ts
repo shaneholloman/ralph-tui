@@ -506,6 +506,72 @@ describe('BeadsRustTrackerPlugin', () => {
       ]);
     });
 
+    test('merges enriched dependencies with existing list dependencies and deduplicates', async () => {
+      mockSpawnResponses = [
+        { exitCode: 0, stdout: 'br version 0.4.1\n' },
+        {
+          exitCode: 0,
+          stdout: JSON.stringify([
+            {
+              id: 't1',
+              title: 'Task 1',
+              status: 'open',
+              priority: 2,
+              dependency_count: 2,
+              dependencies: [
+                { id: 'dep-a', title: 'Dep A', status: 'open', priority: 2, dependency_type: 'blocks' },
+              ],
+            },
+          ]),
+        },
+        {
+          exitCode: 0,
+          stdout: JSON.stringify([
+            { issue_id: 't1', depends_on_id: 'dep-a', type: 'blocks', title: 'Dep A', status: 'open', priority: 2 },
+            { issue_id: 't1', depends_on_id: 'dep-b', type: 'blocks', title: 'Dep B', status: 'open', priority: 2 },
+          ]),
+        },
+      ];
+
+      const plugin = new BeadsRustTrackerPlugin();
+      await plugin.initialize({ workingDir: '/test' });
+      mockSpawnArgs = [];
+
+      const tasks = await plugin.getTasks();
+
+      expect(tasks.length).toBe(1);
+      expect(tasks[0]?.dependsOn).toEqual(['dep-a', 'dep-b']);
+    });
+
+    test('ignores reverse-direction and self-referential rows during dependency enrichment', async () => {
+      mockSpawnResponses = [
+        { exitCode: 0, stdout: 'br version 0.4.1\n' },
+        {
+          exitCode: 0,
+          stdout: JSON.stringify([
+            { id: 't1', title: 'Task 1', status: 'open', priority: 2, dependency_count: 1 },
+          ]),
+        },
+        {
+          exitCode: 0,
+          stdout: JSON.stringify([
+            { issue_id: 'other', depends_on_id: 't1', type: 'blocks', title: 'Reverse', status: 'open', priority: 2 },
+            { issue_id: 't1', depends_on_id: 't1', type: 'blocks', title: 'Self', status: 'open', priority: 2 },
+            { issue_id: 't1', depends_on_id: 'dep-real', type: 'blocks', title: 'Real dep', status: 'open', priority: 2 },
+          ]),
+        },
+      ];
+
+      const plugin = new BeadsRustTrackerPlugin();
+      await plugin.initialize({ workingDir: '/test' });
+      mockSpawnArgs = [];
+
+      const tasks = await plugin.getTasks();
+
+      expect(tasks.length).toBe(1);
+      expect(tasks[0]?.dependsOn).toEqual(['dep-real']);
+    });
+
     test('limits concurrent dependency enrichment calls to avoid process fan-out', async () => {
       const taskCount = 18;
       const listOutput = Array.from({ length: taskCount }, (_, i) => ({

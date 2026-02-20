@@ -469,13 +469,6 @@ export class BeadsRustTrackerPlugin extends BaseTrackerPlugin {
   }
 
   /**
-   * Get the next task to work on using br ready.
-   *
-   * This overrides the base implementation to leverage br's server-side readiness
-   * selection (dependency-aware), since br list output may not contain enough
-   * dependency information for client-side readiness filtering.
-   */
-  /**
    * Enrich TrackerTask objects with dependency IDs from br dep list.
    *
    * br list --json only provides dependency_count/dependent_count but not the
@@ -528,13 +521,20 @@ export class BeadsRustTrackerPlugin extends BaseTrackerPlugin {
       const dependsOn: string[] = [];
 
       for (const dep of deps) {
-        if (dep.type === 'blocks') {
+        // dep list can include reverse-direction rows. Keep only dependencies
+        // where the current task is the dependent issue.
+        if (
+          dep.type === 'blocks' &&
+          dep.issue_id === task.id &&
+          dep.depends_on_id !== task.id
+        ) {
           dependsOn.push(dep.depends_on_id);
         }
       }
 
       if (dependsOn.length > 0) {
-        task.dependsOn = dependsOn;
+        const mergedDependsOn = [...(task.dependsOn ?? []), ...dependsOn];
+        task.dependsOn = [...new Set(mergedDependsOn)];
       }
     } catch {
       // Silently skip enrichment failures — falls back to no-dep behavior
@@ -572,6 +572,13 @@ export class BeadsRustTrackerPlugin extends BaseTrackerPlugin {
     }
   }
 
+  /**
+   * Get the next task to work on using br ready.
+   *
+   * This overrides the base implementation to leverage br's server-side readiness
+   * selection (dependency-aware), since br list output may not contain enough
+   * dependency information for client-side readiness filtering.
+   */
   override async getNextTask(filter?: TaskFilter): Promise<TrackerTask | undefined> {
     const args = ['ready', '--json'];
 
