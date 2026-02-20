@@ -395,6 +395,10 @@ export class BeadsRustTrackerPlugin extends BaseTrackerPlugin {
       : filter;
     tasks = this.filterTasks(tasks, filterWithoutParent);
 
+    // Enrich dependencies after all filtering so we only query tasks that will
+    // actually be used by the executor.
+    await this.enrichDependencies(tasks, tasksJson);
+
     return tasks;
   }
 
@@ -465,12 +469,88 @@ export class BeadsRustTrackerPlugin extends BaseTrackerPlugin {
   }
 
   /**
-   * Get the next task to work on using br ready.
+   * Enrich TrackerTask objects with dependency IDs from br dep list.
    *
-   * This overrides the base implementation to leverage br's server-side readiness
-   * selection (dependency-aware), since br list output may not contain enough
-   * dependency information for client-side readiness filtering.
+   * br list --json only provides dependency_count/dependent_count but not the
+   * actual dependency/dependent IDs. This method fetches the full dependency
+   * info for tasks that have dependencies, so the parallel executor's task
+   * graph can correctly order execution groups.
+   *
+   * Only queries tasks where dependency_count > 0 to minimize br calls.
    */
+  private async enrichDependencies(
+    tasks: TrackerTask[],
+    rawTasks: BrTaskJson[]
+  ): Promise<void> {
+    // Build a map of task ID → raw dependency_count for quick lookup
+    const depCountMap = new Map<string, number>();
+    for (const raw of rawTasks) {
+      if (typeof raw.dependency_count === 'number' && raw.dependency_count > 0) {
+        depCountMap.set(raw.id, raw.dependency_count);
+      }
+    }
+
+    const tasksToEnrich = tasks.filter((t) => depCountMap.has(t.id));
+    if (tasksToEnrich.length === 0) {
+      return;
+    }
+
+    // Limit concurrency to avoid spawning too many br subprocesses at once on
+    // large task sets.
+    const maxConcurrentEnrichCalls = 8;
+
+    for (let i = 0; i < tasksToEnrich.length; i += maxConcurrentEnrichCalls) {
+      const batch = tasksToEnrich.slice(i, i + maxConcurrentEnrichCalls);
+      await Promise.all(batch.map((task) => this.enrichTaskDependencies(task)));
+    }
+  }
+
+  /**
+   * Populate dependsOn for a single task from br dep list output.
+   */
+  private async enrichTaskDependencies(task: TrackerTask): Promise<void> {
+    const { stdout, stderr, exitCode } = await execBr(
+      ['dep', 'list', task.id, '--json'],
+      this.workingDir
+    );
+
+    if (exitCode !== 0) {
+      console.warn(
+        `Dependency enrichment failed for task ${task.id}: br dep list exited non-zero`,
+        { taskId: task.id, exitCode, stdout, stderr }
+      );
+      return;
+    }
+
+    try {
+      const deps = JSON.parse(stdout) as BrDepListItem[];
+      const dependsOn: string[] = [];
+
+      for (const dep of deps) {
+        // dep list can include reverse-direction rows. Keep only dependencies
+        // where the current task is the dependent issue.
+        if (
+          dep.type === 'blocks' &&
+          dep.issue_id === task.id &&
+          dep.depends_on_id !== task.id
+        ) {
+          dependsOn.push(dep.depends_on_id);
+        }
+      }
+
+      if (dependsOn.length > 0) {
+        const mergedDependsOn = [...(task.dependsOn ?? []), ...dependsOn];
+        task.dependsOn = [...new Set(mergedDependsOn)];
+      }
+    } catch (error) {
+      console.warn(
+        `Dependency enrichment failed for task ${task.id}: unable to parse br dep list output`,
+        { taskId: task.id, error, stdout }
+      );
+      // Fall back to existing dependency data when enrichment parsing fails.
+    }
+  }
+
   /**
    * Get child IDs for a parent epic/task.
    * Uses br dep list --direction up to get issues that depend on the parent
@@ -502,6 +582,13 @@ export class BeadsRustTrackerPlugin extends BaseTrackerPlugin {
     }
   }
 
+  /**
+   * Get the next task to work on using br ready.
+   *
+   * This overrides the base implementation to leverage br's server-side readiness
+   * selection (dependency-aware), since br list output may not contain enough
+   * dependency information for client-side readiness filtering.
+   */
   override async getNextTask(filter?: TaskFilter): Promise<TrackerTask | undefined> {
     const args = ['ready', '--json'];
 
