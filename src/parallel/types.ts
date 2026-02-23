@@ -336,6 +336,7 @@ export interface ParallelExecutorConfig {
  * Status of the overall parallel executor.
  * - 'idle': Not started
  * - 'analyzing': Running task graph analysis
+ * - 'paused': Execution paused between scheduling steps
  * - 'executing': Workers are running
  * - 'merging': Merging completed workers back to main
  * - 'completed': All groups finished
@@ -345,6 +346,7 @@ export interface ParallelExecutorConfig {
 export type ParallelExecutorStatus =
   | 'idle'
   | 'analyzing'
+  | 'paused'
   | 'executing'
   | 'merging'
   | 'completed'

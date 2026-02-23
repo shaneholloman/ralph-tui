@@ -81,6 +81,9 @@ export class ParallelExecutor {
   private startedAt: string | null = null;
   private sessionId: string;
   private shouldStop = false;
+  private paused = false;
+  private statusBeforePause: ParallelExecutorStatus | null = null;
+  private pauseWaiters: Array<() => void> = [];
 
   private readonly parallelListeners: ParallelEventListener[] = [];
   private readonly engineListeners: EngineEventListener[] = [];
@@ -257,6 +260,9 @@ export class ParallelExecutor {
     this.startedAt = null;
     this.requeueCounts.clear();
     this.sessionId = `parallel-${Date.now()}`;
+    this.paused = false;
+    this.statusBeforePause = null;
+    this.pauseWaiters = [];
     this.pendingConflicts = [];
     this.preservedRecoveryWorktrees = [];
   }
@@ -325,6 +331,8 @@ export class ParallelExecutor {
       // Execute groups in topological order
       for (let i = 0; i < this.taskGraph.groups.length; i++) {
         if (this.shouldStop) break;
+        await this.waitWhilePaused();
+        if (this.shouldStop) break;
 
         this.currentGroupIndex = i;
         const group = this.taskGraph.groups[i];
@@ -374,6 +382,9 @@ export class ParallelExecutor {
    */
   async stop(): Promise<void> {
     this.shouldStop = true;
+    this.paused = false;
+    this.statusBeforePause = null;
+    this.releasePauseWaiters();
 
     // Stop all active workers
     const stopPromises = this.activeWorkers.map((w) => w.stop());
@@ -386,6 +397,14 @@ export class ParallelExecutor {
    * Pause all active workers after their current iterations complete.
    */
   pause(): void {
+    if (this.paused || this.status === 'completed' || this.status === 'failed') {
+      return;
+    }
+
+    this.paused = true;
+    this.statusBeforePause = this.status;
+    this.status = 'paused';
+
     for (const worker of this.activeWorkers) {
       worker.pause();
     }
@@ -395,6 +414,15 @@ export class ParallelExecutor {
    * Resume all active workers from paused state.
    */
   resume(): void {
+    if (!this.paused) {
+      return;
+    }
+
+    this.paused = false;
+    this.status = this.statusBeforePause ?? 'executing';
+    this.statusBeforePause = null;
+    this.releasePauseWaiters();
+
     for (const worker of this.activeWorkers) {
       worker.resume();
     }
@@ -479,6 +507,8 @@ export class ParallelExecutor {
     let groupMergesFailed = 0;
 
     for (const batch of batches) {
+      if (this.shouldStop) break;
+      await this.waitWhilePaused();
       if (this.shouldStop) break;
 
       // Execute batch of workers in parallel
@@ -809,6 +839,22 @@ export class ParallelExecutor {
       } catch {
         // Best effort — user may need to checkout manually
       }
+    }
+  }
+
+  private async waitWhilePaused(): Promise<void> {
+    while (this.paused && !this.shouldStop) {
+      await new Promise<void>((resolve) => {
+        this.pauseWaiters.push(resolve);
+      });
+    }
+  }
+
+  private releasePauseWaiters(): void {
+    const waiters = this.pauseWaiters;
+    this.pauseWaiters = [];
+    for (const resolve of waiters) {
+      resolve();
     }
   }
 

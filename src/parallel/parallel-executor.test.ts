@@ -360,6 +360,50 @@ describe('ParallelExecutor class', () => {
     });
   });
 
+  describe('pause/resume gating', () => {
+    test('pause blocks waiters until resume', async () => {
+      const executor = new ParallelExecutor(createMockConfig(), createMockTracker());
+      (executor as any).status = 'executing';
+
+      executor.pause();
+      expect(executor.getState().status).toBe('paused');
+
+      let released = false;
+      const waiting = (executor as any).waitWhilePaused().then(() => {
+        released = true;
+      });
+
+      await Promise.resolve();
+      expect(released).toBe(false);
+
+      executor.resume();
+      await waiting;
+
+      expect(released).toBe(true);
+      expect(executor.getState().status).toBe('executing');
+    });
+
+    test('stop releases waiters when paused', async () => {
+      const executor = new ParallelExecutor(createMockConfig(), createMockTracker());
+      (executor as any).status = 'executing';
+      executor.pause();
+
+      let released = false;
+      const waiting = (executor as any).waitWhilePaused().then(() => {
+        released = true;
+      });
+
+      await Promise.resolve();
+      expect(released).toBe(false);
+
+      await executor.stop();
+      await waiting;
+
+      expect(released).toBe(true);
+      expect(executor.getState().status).toBe('interrupted');
+    });
+  });
+
   describe('getSessionBranch', () => {
     test('returns null when no session branch created', () => {
       const executor = new ParallelExecutor(createMockConfig(), createMockTracker());
