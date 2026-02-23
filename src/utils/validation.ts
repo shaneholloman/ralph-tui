@@ -3,7 +3,7 @@
  * Provides common validation helpers for strings, numbers, and configurations.
  */
 
-import { compareSemverStrings } from '../setup/migration.js';
+import { compareSemverStrings } from './semver.js';
 
 /**
  * Validation result
@@ -260,7 +260,7 @@ export function checkBunVersion(currentVersion: string, minVersion: string): str
   if (compareSemverStrings(currentVersion, minVersion) < 0) {
     return (
       `ralph-tui requires Bun >= ${minVersion}, but you are running Bun ${currentVersion}.\n` +
-      `Please upgrade: https://bun.sh/docs/installation`
+      `Run 'bun upgrade' or visit https://bun.sh/docs/installation`
     );
   }
 

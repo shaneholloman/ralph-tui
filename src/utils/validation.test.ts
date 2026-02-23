@@ -30,6 +30,7 @@ describe('checkBunVersion', () => {
     expect(result).not.toBeNull();
     expect(result).toContain('requires Bun >= 1.3.6');
     expect(result).toContain('Bun 1.3.5');
+    expect(result).toContain('bun upgrade');
     expect(result).toContain('https://bun.sh/docs/installation');
   });
 
@@ -49,6 +50,14 @@ describe('checkBunVersion', () => {
   test('handles pre-release versions by stripping metadata', () => {
     // 1.3.6-beta should compare as 1.3.6 (equal, so OK)
     expect(checkBunVersion('1.3.6-beta', MIN_VERSION)).toBeNull();
+  });
+
+  test('pre-release below minimum returns error', () => {
+    // 1.3.5-beta strips to 1.3.5, which is below 1.3.6
+    const result = checkBunVersion('1.3.5-beta', MIN_VERSION);
+    expect(result).not.toBeNull();
+    expect(result).toContain('requires Bun >= 1.3.6');
+    expect(result).toContain('Bun 1.3.5-beta');
   });
 
   test('handles build metadata in versions', () => {

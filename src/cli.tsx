@@ -24,9 +24,13 @@ import {
   executeRemoteCommand,
 } from './commands/index.js';
 import { checkBunVersion } from './utils/validation.js';
+import pkg from '../package.json' with { type: 'json' };
 
-/** Minimum bun version required to run ralph-tui. */
-const MIN_BUN_VERSION = '1.3.6';
+/**
+ * Minimum bun version required to run ralph-tui.
+ * Derived from the engines.bun field in package.json (single source of truth).
+ */
+const MIN_BUN_VERSION = pkg.engines.bun.replace(/^[^\d]*/, '');
 
 if (typeof Bun !== 'undefined') {
   const versionError = checkBunVersion(Bun.version, MIN_BUN_VERSION);
