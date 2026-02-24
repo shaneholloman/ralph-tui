@@ -155,14 +155,15 @@ export interface TaskReasoning {
 
 
 /**
- * Execute a bv command and return the output.
+ * Execute a CLI command and return stdout/stderr plus exit code.
  */
-async function execBv(
+async function execCommand(
+  bin: string,
   args: string[],
   cwd?: string
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   return new Promise((resolve) => {
-    const proc = spawn('bv', args, {
+    const proc = spawn(bin, args, {
       cwd,
       env: { ...process.env },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -191,39 +192,39 @@ async function execBv(
 }
 
 /**
+ * Execute a bv command and return the output.
+ */
+async function execBv(
+  args: string[],
+  cwd?: string
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  return execCommand('bv', args, cwd);
+}
+
+/**
  * Execute a bd command and return the output.
  */
 async function execBd(
   args: string[],
   cwd?: string
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  return new Promise((resolve) => {
-    const proc = spawn('bd', args, {
-      cwd,
-      env: { ...process.env },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+  return execCommand('bd', args, cwd);
+}
 
-    let stdout = '';
-    let stderr = '';
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
 
-    proc.stdout.on('data', (data: Buffer) => {
-      stdout += data.toString();
-    });
+function hasMessageField(value: unknown): value is { message: string } {
+  return isObjectRecord(value) && typeof value.message === 'string';
+}
 
-    proc.stderr.on('data', (data: Buffer) => {
-      stderr += data.toString();
-    });
-
-    proc.on('close', (code) => {
-      resolve({ stdout, stderr, exitCode: code ?? 1 });
-    });
-
-    proc.on('error', (err) => {
-      stderr += err.message;
-      resolve({ stdout, stderr, exitCode: 1 });
-    });
-  });
+function hasValidTaskId(value: unknown): value is { id: string } {
+  return (
+    isObjectRecord(value) &&
+    typeof value.id === 'string' &&
+    value.id.trim().length > 0
+  );
 }
 
 
@@ -394,20 +395,29 @@ export class BeadsBvTrackerPlugin extends BeadsTrackerPlugin {
       }
 
       // Parse bv output
-      let nextOutput: BvRobotNextOutput;
+      let nextOutputRaw: unknown;
       try {
-        nextOutput = JSON.parse(stdout) as BvRobotNextOutput;
+        nextOutputRaw = JSON.parse(stdout) as BvRobotNextOutput;
       } catch (err) {
         console.error('Failed to parse bv output:', err);
         return super.getNextTask(filter);
       }
 
       // --robot-next returns { message: "No actionable items available" }
-      // when nothing is unblocked. The discriminated union narrows the
-      // type: after this guard, TypeScript knows nextOutput is BvRobotNextTask.
-      if ('message' in nextOutput) {
+      // when nothing is unblocked. Validate shape before accessing task fields.
+      if (hasMessageField(nextOutputRaw)) {
         return super.getNextTask(filter);
       }
+
+      if (!hasValidTaskId(nextOutputRaw)) {
+        console.error(
+          'Invalid bv --robot-next output (missing task id):',
+          nextOutputRaw
+        );
+        return super.getNextTask(filter);
+      }
+
+      const nextOutput = nextOutputRaw as BvRobotNextTask;
 
       // Verify the selected task belongs to the epic if epicId is set
       const epicId = this.getEpicId();
@@ -539,12 +549,11 @@ export class BeadsBvTrackerPlugin extends BeadsTrackerPlugin {
       try {
         this.lastTriageOutput = JSON.parse(stdout) as BvTriageOutput;
         this.cacheTaskReasoning(this.lastTriageOutput);
+        this.lastTriageRefreshAt = Date.now();
       } catch {
         // Ignore parse errors
       }
     }
-
-    this.lastTriageRefreshAt = Date.now();
   }
 
   /**

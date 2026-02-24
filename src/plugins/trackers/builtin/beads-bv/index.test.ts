@@ -38,6 +38,19 @@ function queueSpawnResponse(response: MockSpawnResponse): void {
   spawnResponses.push(response);
 }
 
+async function withTemporaryGetNextTaskStub(
+  stubbedGetNextTask: typeof BeadsTrackerPlugin.prototype.getNextTask,
+  callback: () => Promise<void>
+): Promise<void> {
+  const originalGetNextTask = BeadsTrackerPlugin.prototype.getNextTask;
+  BeadsTrackerPlugin.prototype.getNextTask = stubbedGetNextTask;
+  try {
+    await callback();
+  } finally {
+    BeadsTrackerPlugin.prototype.getNextTask = originalGetNextTask;
+  }
+}
+
 describe('BeadsBvTrackerPlugin', () => {
   beforeAll(async () => {
     // Minimal mocks to allow module to load
@@ -231,15 +244,62 @@ describe('BeadsBvTrackerPlugin', () => {
         }),
       });
 
-      const originalGetNextTask = BeadsTrackerPlugin.prototype.getNextTask;
-      BeadsTrackerPlugin.prototype.getNextTask = async () => fallbackTask;
-
-      try {
+      await withTemporaryGetNextTaskStub(async () => fallbackTask, async () => {
         const result = await plugin.getNextTask();
         expect(result).toEqual(fallbackTask);
-      } finally {
-        BeadsTrackerPlugin.prototype.getNextTask = originalGetNextTask;
-      }
+      });
+    });
+
+    test('falls back to base tracker when --robot-next exits with non-zero code', async () => {
+      const plugin = new BeadsBvTrackerPlugin();
+      const fallbackTask: TrackerTask = {
+        id: 'fallback-task',
+        title: 'Fallback task',
+        status: 'open',
+        priority: 2,
+      };
+
+      (plugin as unknown as { bvAvailable: boolean }).bvAvailable = true;
+      (plugin as unknown as { scheduleTriageRefresh: () => void }).scheduleTriageRefresh = () => {};
+
+      queueSpawnResponse({
+        command: 'bv',
+        exitCode: 1,
+        stderr: 'command failed',
+      });
+
+      await withTemporaryGetNextTaskStub(async () => fallbackTask, async () => {
+        const result = await plugin.getNextTask();
+        expect(result).toEqual(fallbackTask);
+      });
+    });
+
+    test('falls back to base tracker when --robot-next output has no message and no id', async () => {
+      const plugin = new BeadsBvTrackerPlugin();
+      const fallbackTask: TrackerTask = {
+        id: 'fallback-task',
+        title: 'Fallback task',
+        status: 'open',
+        priority: 2,
+      };
+
+      (plugin as unknown as { bvAvailable: boolean }).bvAvailable = true;
+      (plugin as unknown as { scheduleTriageRefresh: () => void }).scheduleTriageRefresh = () => {};
+
+      queueSpawnResponse({
+        command: 'bv',
+        stdout: JSON.stringify({
+          generated_at: '2026-02-24T00:00:00.000Z',
+          data_hash: 'hash',
+          output_format: 'json',
+          note: 'invalid shape',
+        }),
+      });
+
+      await withTemporaryGetNextTaskStub(async () => fallbackTask, async () => {
+        const result = await plugin.getNextTask();
+        expect(result).toEqual(fallbackTask);
+      });
     });
 
     test('falls back to base tracker when robot-next task is outside selected epic', async () => {
@@ -272,15 +332,10 @@ describe('BeadsBvTrackerPlugin', () => {
         }),
       });
 
-      const originalGetNextTask = BeadsTrackerPlugin.prototype.getNextTask;
-      BeadsTrackerPlugin.prototype.getNextTask = async () => fallbackTask;
-
-      try {
+      await withTemporaryGetNextTaskStub(async () => fallbackTask, async () => {
         const result = await plugin.getNextTask({ parentId: 'epic-1' });
         expect(result).toEqual(fallbackTask);
-      } finally {
-        BeadsTrackerPlugin.prototype.getNextTask = originalGetNextTask;
-      }
+      });
     });
 
     test('constructs fallback task when getTask returns undefined', async () => {
