@@ -355,5 +355,103 @@ describe('BeadsBvTrackerPlugin', () => {
       expect(result?.metadata?.bvUnblocks).toBe(5);
       expect(result?.metadata?.bvBreakdown).toEqual(breakdown);
     });
+
+    test('reuses cached epic children between getNextTask calls', async () => {
+      const plugin = new BeadsBvTrackerPlugin();
+      let epicChildrenCalls = 0;
+
+      (plugin as unknown as { bvAvailable: boolean }).bvAvailable = true;
+      (plugin as unknown as { scheduleTriageRefresh: () => void }).scheduleTriageRefresh = () => {};
+      (plugin as unknown as { getTask: (id: string) => Promise<TrackerTask | undefined> }).getTask =
+        async (_id: string) => undefined;
+      (plugin as unknown as { getEpicChildrenIds: (epicId: string) => Promise<string[]> }).getEpicChildrenIds =
+        async (_epicId: string) => {
+          epicChildrenCalls += 1;
+          return ['task-1'];
+        };
+
+      queueSpawnResponse({
+        command: 'bv',
+        stdout: JSON.stringify({
+          generated_at: '2026-02-24T00:00:00.000Z',
+          data_hash: 'hash-1',
+          output_format: 'json',
+          id: 'task-1',
+          title: 'Cached epic child',
+          score: 0.7,
+          reasons: ['Top rank'],
+          unblocks: 2,
+          claim_command: 'bd update task-1 --status in_progress',
+          show_command: 'bd show task-1',
+        }),
+      });
+      queueSpawnResponse({
+        command: 'bv',
+        stdout: JSON.stringify({
+          generated_at: '2026-02-24T00:00:01.000Z',
+          data_hash: 'hash-2',
+          output_format: 'json',
+          id: 'task-1',
+          title: 'Cached epic child',
+          score: 0.71,
+          reasons: ['Top rank'],
+          unblocks: 2,
+          claim_command: 'bd update task-1 --status in_progress',
+          show_command: 'bd show task-1',
+        }),
+      });
+
+      const first = await plugin.getNextTask({ parentId: 'epic-1' });
+      const second = await plugin.getNextTask({ parentId: 'epic-1' });
+
+      expect(first?.id).toBe('task-1');
+      expect(second?.id).toBe('task-1');
+      expect(epicChildrenCalls).toBe(1);
+    });
+  });
+
+  describe('scheduleTriageRefresh', () => {
+    test('queues a forced refresh while a refresh is already in-flight', async () => {
+      const plugin = new BeadsBvTrackerPlugin();
+      const state = plugin as unknown as {
+        bvAvailable: boolean;
+        scheduleTriageRefresh: (force?: boolean) => void;
+        refreshTriage: () => Promise<void>;
+        triageRefreshInFlight: Promise<void> | null;
+      };
+
+      state.bvAvailable = true;
+
+      let refreshCalls = 0;
+      let releaseFirstRefresh!: () => void;
+      const firstRefreshGate = new Promise<void>((resolve) => {
+        releaseFirstRefresh = resolve;
+      });
+
+      state.refreshTriage = async () => {
+        refreshCalls += 1;
+        if (refreshCalls === 1) {
+          await firstRefreshGate;
+        }
+      };
+
+      state.scheduleTriageRefresh();
+      state.scheduleTriageRefresh(true);
+
+      expect(refreshCalls).toBe(1);
+      expect(state.triageRefreshInFlight).not.toBeNull();
+
+      releaseFirstRefresh();
+
+      for (let i = 0; i < 20; i += 1) {
+        if (refreshCalls === 2 && state.triageRefreshInFlight === null) {
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+
+      expect(refreshCalls).toBe(2);
+      expect(state.triageRefreshInFlight).toBeNull();
+    });
   });
 });

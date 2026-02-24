@@ -40,6 +40,7 @@ interface BvRecommendation {
 }
 
 const TRIAGE_REFRESH_MIN_INTERVAL_MS = 30_000;
+const EPIC_CHILDREN_CACHE_TTL_MS = 30_000;
 
 /**
  * Output from bv --robot-next when an actionable task exists.
@@ -247,7 +248,12 @@ export class BeadsBvTrackerPlugin extends BeadsTrackerPlugin {
   private bvAvailable = false;
   private lastTriageOutput: BvTriageOutput | null = null;
   private taskReasoningCache: Map<string, TaskReasoning> = new Map();
+  private epicChildrenCache = new Map<
+    string,
+    { ids: string[]; cachedAt: number }
+  >();
   private triageRefreshInFlight: Promise<void> | null = null;
+  private pendingForcedTriageRefresh = false;
   private lastTriageRefreshAt = 0;
 
   override async initialize(config: Record<string, unknown>): Promise<void> {
@@ -407,7 +413,7 @@ export class BeadsBvTrackerPlugin extends BeadsTrackerPlugin {
       const epicId = this.getEpicId();
       if (filter?.parentId || epicId) {
         const parentId = filter?.parentId ?? epicId;
-        const epicChildren = await this.getEpicChildrenIds(parentId);
+        const epicChildren = await this.getCachedEpicChildrenIds(parentId);
         if (!epicChildren.includes(nextOutput.id)) {
           // bv's top pick isn't in our epic — fall back to base beads
           // which filters by epic natively
@@ -583,6 +589,7 @@ export class BeadsBvTrackerPlugin extends BeadsTrackerPlugin {
 
     // Clear cached reasoning for completed task
     this.taskReasoningCache.delete(id);
+    this.invalidateEpicChildrenCache();
 
     // Refresh triage data asynchronously
     if (result.success && this.bvAvailable) {
@@ -604,6 +611,7 @@ export class BeadsBvTrackerPlugin extends BeadsTrackerPlugin {
 
     // Refresh triage data asynchronously
     if (result && this.bvAvailable) {
+      this.invalidateEpicChildrenCache();
       this.scheduleTriageRefresh(true);
     }
 
@@ -689,6 +697,24 @@ export class BeadsBvTrackerPlugin extends BeadsTrackerPlugin {
     }
   }
 
+  private async getCachedEpicChildrenIds(epicId: string): Promise<string[]> {
+    const cached = this.epicChildrenCache.get(epicId);
+    if (
+      cached &&
+      Date.now() - cached.cachedAt < EPIC_CHILDREN_CACHE_TTL_MS
+    ) {
+      return cached.ids;
+    }
+
+    const ids = await this.getEpicChildrenIds(epicId);
+    this.epicChildrenCache.set(epicId, { ids, cachedAt: Date.now() });
+    return ids;
+  }
+
+  private invalidateEpicChildrenCache(): void {
+    this.epicChildrenCache.clear();
+  }
+
   // Helper methods to access config values (since parent properties are protected)
   private getWorkingDir(): string {
     return (this.config.workingDir as string) ?? process.cwd();
@@ -736,6 +762,9 @@ export class BeadsBvTrackerPlugin extends BeadsTrackerPlugin {
     }
 
     if (this.triageRefreshInFlight) {
+      if (force) {
+        this.pendingForcedTriageRefresh = true;
+      }
       return;
     }
 
@@ -748,9 +777,18 @@ export class BeadsBvTrackerPlugin extends BeadsTrackerPlugin {
       return;
     }
 
-    this.triageRefreshInFlight = this.refreshTriage().finally(() => {
-      this.triageRefreshInFlight = null;
-    });
+    this.triageRefreshInFlight = this.refreshTriage()
+      .catch((err) => {
+        console.error('Failed to refresh bv triage data:', err);
+      })
+      .finally(() => {
+        this.triageRefreshInFlight = null;
+
+        if (this.pendingForcedTriageRefresh) {
+          this.pendingForcedTriageRefresh = false;
+          this.scheduleTriageRefresh(true);
+        }
+      });
   }
 }
 
