@@ -274,6 +274,20 @@ export class BeadsRustBvTrackerPlugin extends BaseTrackerPlugin {
         }
 
         try {
+            const statusFilter = this.normalizeStatusFilter(filter?.status);
+
+            // --robot-next only returns actionable tasks (open/in_progress).
+            // If a caller asks for only non-actionable statuses, there is no
+            // valid --robot-next result by definition.
+            if (
+                statusFilter &&
+                !statusFilter.some(
+                    (status) => status === 'open' || status === 'in_progress'
+                )
+            ) {
+                return this.delegate.getNextTask(filter);
+            }
+
             const args = ['--robot-next'];
 
             // Forward label filter.
@@ -324,6 +338,9 @@ export class BeadsRustBvTrackerPlugin extends BaseTrackerPlugin {
                 if (!fullTask || fullTask.parentId !== epicFilter) {
                     return this.delegate.getNextTask(filter);
                 }
+                if (statusFilter && !statusFilter.includes(fullTask.status)) {
+                    return this.delegate.getNextTask(filter);
+                }
                 // Augment and return.
                 fullTask.metadata = {
                     ...fullTask.metadata,
@@ -331,6 +348,7 @@ export class BeadsRustBvTrackerPlugin extends BaseTrackerPlugin {
                     bvReasons: nextOutput.reasons,
                     bvUnblocks: nextOutput.unblocks,
                 };
+                this.scheduleTriageRefresh();
                 return fullTask;
             }
 
@@ -340,6 +358,9 @@ export class BeadsRustBvTrackerPlugin extends BaseTrackerPlugin {
             // Fetch full task details.
             const fullTask = await this.delegate.getTask(nextOutput.id);
             if (fullTask) {
+                if (statusFilter && !statusFilter.includes(fullTask.status)) {
+                    return this.delegate.getNextTask(filter);
+                }
                 fullTask.metadata = {
                     ...fullTask.metadata,
                     bvScore: nextOutput.score,
@@ -347,6 +368,10 @@ export class BeadsRustBvTrackerPlugin extends BaseTrackerPlugin {
                     bvUnblocks: nextOutput.unblocks,
                 };
                 return fullTask;
+            }
+
+            if (statusFilter && !statusFilter.includes('open')) {
+                return this.delegate.getNextTask(filter);
             }
 
             // Fallback: construct minimal task from robot-next output.
@@ -499,14 +524,13 @@ export class BeadsRustBvTrackerPlugin extends BaseTrackerPlugin {
                 // Ignore parse errors — fall back to empty recommendations.
                 this.lastTriageOutput = { triage: { recommendations: [] } };
             }
+            // Only update timestamp on success so failed refreshes don't
+            // suppress retries via the rate limiter.
+            this.lastTriageRefreshAt = Date.now();
         } else {
             // Non-zero exit: treat as empty to avoid stale data.
             this.lastTriageOutput = { triage: { recommendations: [] } };
         }
-
-        // Always update the timestamp so scheduleTriageRefresh's 30-second
-        // debounce is respected even when bv fails, preventing rapid retries.
-        this.lastTriageRefreshAt = Date.now();
     }
 
     override getTemplate(): string {
@@ -516,6 +540,16 @@ export class BeadsRustBvTrackerPlugin extends BaseTrackerPlugin {
     // -------------------------------------------------------------------------
     // Private helpers
     // -------------------------------------------------------------------------
+
+    private normalizeStatusFilter(
+        statusFilter: TaskFilter['status']
+    ): TrackerTaskStatus[] | undefined {
+        if (statusFilter === undefined) {
+            return undefined;
+        }
+
+        return Array.isArray(statusFilter) ? statusFilter : [statusFilter];
+    }
 
     private scheduleTriageRefresh(force = false): void {
         if (!this.bvAvailable) {
