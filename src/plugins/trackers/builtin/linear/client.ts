@@ -314,6 +314,9 @@ export class RalphLinearClient {
   /**
    * Create a blocking relation between two issues.
    * `blockingIssueId` blocks `blockedIssueId`.
+   *
+   * Linear SDK semantics: createIssueRelation({ issueId: A, relatedIssueId: B, type: Blocks })
+   * means "A blocks B". So issueId must be the blocker.
    */
   async createBlockingRelation(
     blockingIssueId: string,
@@ -321,8 +324,8 @@ export class RalphLinearClient {
   ): Promise<CreatedRelation> {
     try {
       const payload = await this.client.createIssueRelation({
-        issueId: blockedIssueId,
-        relatedIssueId: blockingIssueId,
+        issueId: blockingIssueId,
+        relatedIssueId: blockedIssueId,
         type: IssueRelationType.Blocks,
       });
 
@@ -378,18 +381,22 @@ export class RalphLinearClient {
   /**
    * Get blocking relations for an issue.
    * Returns IDs of issues that block the given issue.
+   *
+   * Uses `inverseRelations()` because we need relations where the given issue is
+   * the `relatedIssueId` (blocked), not the `issueId` (blocker).
+   * In inverse relations with type "blocks", `rel.issue` is the blocker.
    */
   async getBlockingIssueIds(issueId: string): Promise<string[]> {
     try {
       const issue = await this.client.issue(issueId);
-      const relations = await issue.relations();
+      const inverseRels = await issue.inverseRelations();
 
       const blockingIds: string[] = [];
-      for (const rel of relations.nodes) {
+      for (const rel of inverseRels.nodes) {
         if (rel.type === 'blocks') {
-          const relatedIssue = await rel.relatedIssue;
-          if (relatedIssue) {
-            blockingIds.push(relatedIssue.id);
+          const blockerIssue = await rel.issue;
+          if (blockerIssue) {
+            blockingIds.push(blockerIssue.id);
           }
         }
       }
@@ -403,6 +410,7 @@ export class RalphLinearClient {
   /**
    * Resolve label names to their Linear IDs, creating any that don't exist.
    * Label matching is case-insensitive.
+   * Note: fetches up to 250 labels without pagination — sufficient for most workspaces.
    */
   async resolveLabelIds(labelNames: string[]): Promise<string[]> {
     if (labelNames.length === 0) return [];

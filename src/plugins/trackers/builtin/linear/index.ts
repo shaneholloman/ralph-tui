@@ -461,14 +461,8 @@ export class LinearTrackerPlugin extends BaseTrackerPlugin {
    * Count completed children from a set of child issues.
    */
   private async countCompletedChildren(children: Issue[]): Promise<number> {
-    let count = 0;
-    for (const child of children) {
-      const state = await child.state;
-      if (state?.type === 'completed' || state?.type === 'canceled') {
-        count++;
-      }
-    }
-    return count;
+    const states = await Promise.all(children.map((child) => child.state));
+    return states.filter((s) => s?.type === 'completed' || s?.type === 'canceled').length;
   }
 }
 
