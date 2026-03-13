@@ -33,6 +33,17 @@ class TestablePiPlugin extends PiAgentPlugin {
   }
 }
 
+/**
+ * Safely dispose a plugin if it's still ready.
+ * Only catches errors from an already-disposed plugin (isReady returned a
+ * stale value); genuine disposal failures are re-thrown so tests surface them.
+ */
+async function disposeIfReady(plugin: PiAgentPlugin): Promise<void> {
+  if (await plugin.isReady()) {
+    await plugin.dispose();
+  }
+}
+
 describe('PiAgentPlugin', () => {
   let plugin: PiAgentPlugin;
 
@@ -41,13 +52,7 @@ describe('PiAgentPlugin', () => {
   });
 
   afterEach(async () => {
-    try {
-      if (await plugin.isReady()) {
-        await plugin.dispose();
-      }
-    } catch {
-      // Ignore errors from already-disposed plugin
-    }
+    await disposeIfReady(plugin);
   });
 
   describe('metadata', () => {
@@ -112,24 +117,42 @@ describe('PiAgentPlugin', () => {
       expect(await plugin.isReady()).toBe(true);
     });
 
-    test('ignores invalid mode', async () => {
-      await plugin.initialize({ mode: 'invalid' });
-      expect(await plugin.isReady()).toBe(true);
+    test('ignores invalid mode and preserves default json mode', async () => {
+      const testable = new TestablePiPlugin();
+      await testable.initialize({ mode: 'invalid' });
+      expect(await testable.isReady()).toBe(true);
+      // Default mode is json, so --mode json should appear
+      const args = testable.testBuildArgs('test');
+      expect(args).toContain('--mode');
+      expect(args).toContain('json');
+      await disposeIfReady(testable);
     });
 
-    test('ignores invalid thinking level', async () => {
-      await plugin.initialize({ thinking: 'ultra' });
-      expect(await plugin.isReady()).toBe(true);
+    test('ignores invalid thinking level and omits --thinking', async () => {
+      const testable = new TestablePiPlugin();
+      await testable.initialize({ thinking: 'ultra' });
+      expect(await testable.isReady()).toBe(true);
+      const args = testable.testBuildArgs('test');
+      expect(args).not.toContain('--thinking');
+      await disposeIfReady(testable);
     });
 
-    test('ignores non-string model', async () => {
-      await plugin.initialize({ model: 123 });
-      expect(await plugin.isReady()).toBe(true);
+    test('ignores non-string model and omits --model', async () => {
+      const testable = new TestablePiPlugin();
+      await testable.initialize({ model: 123 });
+      expect(await testable.isReady()).toBe(true);
+      const args = testable.testBuildArgs('test');
+      expect(args).not.toContain('--model');
+      await disposeIfReady(testable);
     });
 
-    test('ignores empty model string', async () => {
-      await plugin.initialize({ model: '' });
-      expect(await plugin.isReady()).toBe(true);
+    test('ignores empty model string and omits --model', async () => {
+      const testable = new TestablePiPlugin();
+      await testable.initialize({ model: '' });
+      expect(await testable.isReady()).toBe(true);
+      const args = testable.testBuildArgs('test');
+      expect(args).not.toContain('--model');
+      await disposeIfReady(testable);
     });
 
     test('ignores non-number timeout', async () => {
@@ -225,13 +248,7 @@ describe('PiAgentPlugin', () => {
     });
 
     afterEach(async () => {
-      try {
-        if (await testablePlugin.isReady()) {
-          await testablePlugin.dispose();
-        }
-      } catch {
-        // Ignore errors from already-disposed plugin
-      }
+      await disposeIfReady(testablePlugin);
     });
 
     test('includes --print for non-interactive mode', () => {
@@ -334,13 +351,7 @@ describe('PiAgentPlugin', () => {
     });
 
     afterEach(async () => {
-      try {
-        if (await testablePlugin.isReady()) {
-          await testablePlugin.dispose();
-        }
-      } catch {
-        // Ignore errors from already-disposed plugin
-      }
+      await disposeIfReady(testablePlugin);
     });
 
     test('returns the prompt for stdin', () => {
@@ -455,6 +466,65 @@ describe('parsePiJsonLine', () => {
       });
       expect(parsePiJsonLine(line)).toEqual([]);
     });
+
+    test('skips tool_use_start when name is not a string', () => {
+      const line = JSON.stringify({
+        type: 'message_update',
+        assistantMessageEvent: {
+          type: 'tool_use_start',
+          name: 42,
+          input: { path: '/tmp/test.ts' },
+        },
+      });
+      expect(parsePiJsonLine(line)).toEqual([]);
+    });
+
+    test('skips tool_use_start when input is not an object', () => {
+      const line = JSON.stringify({
+        type: 'message_update',
+        assistantMessageEvent: {
+          type: 'tool_use_start',
+          name: 'read_file',
+          input: 'not an object',
+        },
+      });
+      expect(parsePiJsonLine(line)).toEqual([]);
+    });
+
+    test('skips tool_use_start when input is an array', () => {
+      const line = JSON.stringify({
+        type: 'message_update',
+        assistantMessageEvent: {
+          type: 'tool_use_start',
+          name: 'read_file',
+          input: [1, 2, 3],
+        },
+      });
+      expect(parsePiJsonLine(line)).toEqual([]);
+    });
+
+    test('handles assistantMessageEvent with non-string type', () => {
+      const line = JSON.stringify({
+        type: 'message_update',
+        assistantMessageEvent: { type: 123 },
+      });
+      expect(parsePiJsonLine(line)).toEqual([]);
+    });
+
+    test('accepts pre-parsed object input', () => {
+      const parsed = {
+        type: 'message_update',
+        assistantMessageEvent: {
+          type: 'tool_use_start',
+          name: 'write_file',
+          input: { path: '/tmp/out.ts', content: 'hello' },
+        },
+      };
+      const events = parsePiJsonLine(parsed);
+      expect(events).toEqual([
+        { type: 'tool_use', name: 'write_file', input: { path: '/tmp/out.ts', content: 'hello' } },
+      ]);
+    });
   });
 
   describe('message_end events', () => {
@@ -508,6 +578,16 @@ describe('parsePiJsonLine', () => {
       const line = JSON.stringify({
         type: 'message_end',
         message: { role: 'assistant' },
+      });
+      expect(parsePiJsonLine(line)).toEqual([]);
+    });
+
+    test('skips text blocks where text is not a string', () => {
+      const line = JSON.stringify({
+        type: 'message_end',
+        message: {
+          content: [{ type: 'text', text: 42 }],
+        },
       });
       expect(parsePiJsonLine(line)).toEqual([]);
     });

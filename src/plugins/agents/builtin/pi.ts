@@ -27,76 +27,110 @@ import type {
  *
  * @internal Exported for testing only.
  */
-export function parsePiJsonLine(jsonLine: string): AgentDisplayEvent[] {
-  if (!jsonLine || jsonLine.length === 0) return [];
+export function parsePiJsonLine(input: string | Record<string, unknown>): AgentDisplayEvent[] {
+  if (!input) return [];
 
-  try {
-    const event = JSON.parse(jsonLine) as Record<string, unknown>;
-    const events: AgentDisplayEvent[] = [];
+  let event: Record<string, unknown>;
+  if (typeof input === 'string') {
+    if (input.length === 0) return [];
+    try {
+      event = JSON.parse(input) as Record<string, unknown>;
+    } catch {
+      return [];
+    }
+  } else {
+    event = input;
+  }
 
-    switch (event.type) {
-      case 'message_update': {
-        const assistantEvent = event.assistantMessageEvent as Record<string, unknown> | undefined;
-        if (assistantEvent) {
-          const eventType = assistantEvent.type as string | undefined;
-          switch (eventType) {
-            case 'text_delta':
-            case 'text_end':
-              // Text content is accumulated in the message
-              break;
-            case 'tool_use_start':
+  const events: AgentDisplayEvent[] = [];
+
+  switch (event.type) {
+    case 'message_update': {
+      const assistantEvent = event.assistantMessageEvent;
+      if (
+        assistantEvent != null &&
+        typeof assistantEvent === 'object' &&
+        !Array.isArray(assistantEvent)
+      ) {
+        const ame = assistantEvent as Record<string, unknown>;
+        const eventType = ame.type;
+        if (typeof eventType !== 'string') break;
+
+        switch (eventType) {
+          case 'text_delta':
+          case 'text_end':
+            // Text content is accumulated in the message
+            break;
+          case 'tool_use_start':
+            if (
+              typeof ame.name === 'string' &&
+              ame.input != null &&
+              typeof ame.input === 'object' &&
+              !Array.isArray(ame.input)
+            ) {
               events.push({
                 type: 'tool_use',
-                name: assistantEvent.name as string,
-                input: assistantEvent.input as Record<string, unknown>,
-              });
-              break;
-            case 'tool_use_end':
-              events.push({ type: 'tool_result' });
-              break;
-          }
-        }
-        break;
-      }
-
-      case 'message_end': {
-        const message = event.message as Record<string, unknown> | undefined;
-        if (message && Array.isArray(message.content)) {
-          for (const block of message.content) {
-            const blockType = (block as Record<string, unknown>).type as string;
-            if (blockType === 'text') {
-              const text = (block as Record<string, unknown>).text as string;
-              if (text) {
-                events.push({ type: 'text', content: text });
-              }
-            }
-          }
-        }
-        break;
-      }
-
-      case 'turn_end': {
-        const msg = event.message as Record<string, unknown> | undefined;
-        if (msg && Array.isArray(msg.toolResults) && msg.toolResults.length > 0) {
-          for (const result of msg.toolResults) {
-            const resultObj = result as Record<string, unknown>;
-            if (resultObj.error) {
-              events.push({
-                type: 'error',
-                message: String(resultObj.error),
+                name: ame.name,
+                input: ame.input as Record<string, unknown>,
               });
             }
-          }
+            break;
+          case 'tool_use_end':
+            events.push({ type: 'tool_result' });
+            break;
         }
-        break;
       }
+      break;
     }
 
-    return events;
-  } catch {
-    // Not valid JSON - skip
-    return [];
+    case 'message_end': {
+      const message = event.message;
+      if (
+        message != null &&
+        typeof message === 'object' &&
+        !Array.isArray(message) &&
+        Array.isArray((message as Record<string, unknown>).content)
+      ) {
+        for (const block of (message as Record<string, unknown>).content as unknown[]) {
+          if (
+            block != null &&
+            typeof block === 'object' &&
+            !Array.isArray(block) &&
+            (block as Record<string, unknown>).type === 'text' &&
+            typeof (block as Record<string, unknown>).text === 'string' &&
+            ((block as Record<string, unknown>).text as string).length > 0
+          ) {
+            events.push({ type: 'text', content: (block as Record<string, unknown>).text as string });
+          }
+        }
+      }
+      break;
+    }
+
+    case 'turn_end': {
+      const msg = event.message;
+      if (
+        msg != null &&
+        typeof msg === 'object' &&
+        !Array.isArray(msg) &&
+        Array.isArray((msg as Record<string, unknown>).toolResults) &&
+        ((msg as Record<string, unknown>).toolResults as unknown[]).length > 0
+      ) {
+        for (const result of (msg as Record<string, unknown>).toolResults as unknown[]) {
+          const resultObj = result as Record<string, unknown>;
+          if (resultObj.error) {
+            events.push({
+              type: 'error',
+              message: String(resultObj.error),
+            });
+          }
+        }
+      }
+      break;
+    }
   }
+
+  return events;
 }
 
 /**
@@ -366,8 +400,8 @@ export class PiAgentPlugin extends BaseAgentPlugin {
    * Parse a Pi JSONL line into standardized display events.
    * Delegates to the standalone parsePiJsonLine function.
    */
-  private parsePiJsonLine(jsonLine: string): AgentDisplayEvent[] {
-    return parsePiJsonLine(jsonLine);
+  private parsePiJsonLine(input: string | Record<string, unknown>): AgentDisplayEvent[] {
+    return parsePiJsonLine(input);
   }
 
   /**
@@ -387,16 +421,20 @@ export class PiAgentPlugin extends BaseAgentPlugin {
         const trimmed = line.trim();
         if (!trimmed) continue;
 
-        if (options?.onJsonlMessage) {
-          try {
-            const rawJson = JSON.parse(trimmed) as Record<string, unknown>;
-            options.onJsonlMessage(rawJson);
-          } catch {
-            // Not valid JSON, skip
-          }
+        // Parse JSON once and reuse for both callbacks and event mapping
+        let parsed: Record<string, unknown> | null = null;
+        try {
+          parsed = JSON.parse(trimmed) as Record<string, unknown>;
+        } catch {
+          // Not valid JSON — skip onJsonlMessage, still try parsePiJsonLine
+          // (which will also fail gracefully on invalid input)
         }
 
-        events.push(...this.parsePiJsonLine(trimmed));
+        if (parsed && options?.onJsonlMessage) {
+          options.onJsonlMessage(parsed);
+        }
+
+        events.push(...this.parsePiJsonLine(parsed ?? trimmed));
       }
 
       if (events.length > 0) {
