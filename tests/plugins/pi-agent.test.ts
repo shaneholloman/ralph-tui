@@ -4,7 +4,7 @@
  */
 
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
-import { PiAgentPlugin } from '../../src/plugins/agents/builtin/pi.js';
+import { PiAgentPlugin, parsePiJsonLine } from '../../src/plugins/agents/builtin/pi.js';
 import type {
   AgentFileContext,
   AgentExecuteOptions,
@@ -381,6 +381,201 @@ describe('PiAgentPlugin', () => {
     test('returns requiresNetwork true', () => {
       const requirements = plugin.getSandboxRequirements();
       expect(requirements.requiresNetwork).toBe(true);
+    });
+  });
+});
+
+describe('parsePiJsonLine', () => {
+  test('returns empty array for empty input', () => {
+    expect(parsePiJsonLine('')).toEqual([]);
+    expect(parsePiJsonLine(null as unknown as string)).toEqual([]);
+    expect(parsePiJsonLine(undefined as unknown as string)).toEqual([]);
+  });
+
+  test('returns empty array for invalid JSON', () => {
+    expect(parsePiJsonLine('not json')).toEqual([]);
+    expect(parsePiJsonLine('{broken')).toEqual([]);
+  });
+
+  test('returns empty array for unknown event type', () => {
+    const line = JSON.stringify({ type: 'unknown_event', data: 'test' });
+    expect(parsePiJsonLine(line)).toEqual([]);
+  });
+
+  describe('message_update events', () => {
+    test('parses tool_use_start into tool_use event', () => {
+      const line = JSON.stringify({
+        type: 'message_update',
+        assistantMessageEvent: {
+          type: 'tool_use_start',
+          name: 'read_file',
+          input: { path: '/tmp/test.ts' },
+        },
+      });
+      const events = parsePiJsonLine(line);
+      expect(events).toEqual([
+        { type: 'tool_use', name: 'read_file', input: { path: '/tmp/test.ts' } },
+      ]);
+    });
+
+    test('parses tool_use_end into tool_result event', () => {
+      const line = JSON.stringify({
+        type: 'message_update',
+        assistantMessageEvent: { type: 'tool_use_end' },
+      });
+      const events = parsePiJsonLine(line);
+      expect(events).toEqual([{ type: 'tool_result' }]);
+    });
+
+    test('text_delta produces no events (accumulated in message)', () => {
+      const line = JSON.stringify({
+        type: 'message_update',
+        assistantMessageEvent: { type: 'text_delta', text: 'hello' },
+      });
+      expect(parsePiJsonLine(line)).toEqual([]);
+    });
+
+    test('text_end produces no events (accumulated in message)', () => {
+      const line = JSON.stringify({
+        type: 'message_update',
+        assistantMessageEvent: { type: 'text_end' },
+      });
+      expect(parsePiJsonLine(line)).toEqual([]);
+    });
+
+    test('handles missing assistantMessageEvent', () => {
+      const line = JSON.stringify({ type: 'message_update' });
+      expect(parsePiJsonLine(line)).toEqual([]);
+    });
+
+    test('handles unknown assistantMessageEvent type', () => {
+      const line = JSON.stringify({
+        type: 'message_update',
+        assistantMessageEvent: { type: 'something_new' },
+      });
+      expect(parsePiJsonLine(line)).toEqual([]);
+    });
+  });
+
+  describe('message_end events', () => {
+    test('extracts text blocks from message content', () => {
+      const line = JSON.stringify({
+        type: 'message_end',
+        message: {
+          content: [
+            { type: 'text', text: 'Hello world' },
+            { type: 'text', text: 'Second block' },
+          ],
+        },
+      });
+      const events = parsePiJsonLine(line);
+      expect(events).toEqual([
+        { type: 'text', content: 'Hello world' },
+        { type: 'text', content: 'Second block' },
+      ]);
+    });
+
+    test('skips non-text content blocks', () => {
+      const line = JSON.stringify({
+        type: 'message_end',
+        message: {
+          content: [
+            { type: 'tool_use', name: 'read_file' },
+            { type: 'text', text: 'Result' },
+          ],
+        },
+      });
+      const events = parsePiJsonLine(line);
+      expect(events).toEqual([{ type: 'text', content: 'Result' }]);
+    });
+
+    test('skips text blocks with empty text', () => {
+      const line = JSON.stringify({
+        type: 'message_end',
+        message: {
+          content: [{ type: 'text', text: '' }],
+        },
+      });
+      expect(parsePiJsonLine(line)).toEqual([]);
+    });
+
+    test('handles missing message', () => {
+      const line = JSON.stringify({ type: 'message_end' });
+      expect(parsePiJsonLine(line)).toEqual([]);
+    });
+
+    test('handles message with no content array', () => {
+      const line = JSON.stringify({
+        type: 'message_end',
+        message: { role: 'assistant' },
+      });
+      expect(parsePiJsonLine(line)).toEqual([]);
+    });
+  });
+
+  describe('turn_end events', () => {
+    test('extracts errors from tool results', () => {
+      const line = JSON.stringify({
+        type: 'turn_end',
+        message: {
+          toolResults: [
+            { error: 'File not found: /tmp/missing.ts' },
+          ],
+        },
+      });
+      const events = parsePiJsonLine(line);
+      expect(events).toEqual([
+        { type: 'error', message: 'File not found: /tmp/missing.ts' },
+      ]);
+    });
+
+    test('extracts multiple errors from tool results', () => {
+      const line = JSON.stringify({
+        type: 'turn_end',
+        message: {
+          toolResults: [
+            { error: 'Error 1' },
+            { output: 'success' },
+            { error: 'Error 2' },
+          ],
+        },
+      });
+      const events = parsePiJsonLine(line);
+      expect(events).toEqual([
+        { type: 'error', message: 'Error 1' },
+        { type: 'error', message: 'Error 2' },
+      ]);
+    });
+
+    test('skips tool results without errors', () => {
+      const line = JSON.stringify({
+        type: 'turn_end',
+        message: {
+          toolResults: [{ output: 'all good' }],
+        },
+      });
+      expect(parsePiJsonLine(line)).toEqual([]);
+    });
+
+    test('handles empty toolResults array', () => {
+      const line = JSON.stringify({
+        type: 'turn_end',
+        message: { toolResults: [] },
+      });
+      expect(parsePiJsonLine(line)).toEqual([]);
+    });
+
+    test('handles missing message', () => {
+      const line = JSON.stringify({ type: 'turn_end' });
+      expect(parsePiJsonLine(line)).toEqual([]);
+    });
+
+    test('handles missing toolResults', () => {
+      const line = JSON.stringify({
+        type: 'turn_end',
+        message: {},
+      });
+      expect(parsePiJsonLine(line)).toEqual([]);
     });
   });
 });

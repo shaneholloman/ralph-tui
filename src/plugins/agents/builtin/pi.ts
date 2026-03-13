@@ -18,6 +18,88 @@ import type {
 } from '../types.js';
 
 /**
+ * Parse a Pi JSONL line into standardized display events.
+ *
+ * Pi emits structured JSONL with event types:
+ * - message_update: streaming events (text_delta, tool_use_start, tool_use_end)
+ * - message_end: final message with accumulated content blocks
+ * - turn_end: turn completion with tool results and errors
+ *
+ * @internal Exported for testing only.
+ */
+export function parsePiJsonLine(jsonLine: string): AgentDisplayEvent[] {
+  if (!jsonLine || jsonLine.length === 0) return [];
+
+  try {
+    const event = JSON.parse(jsonLine) as Record<string, unknown>;
+    const events: AgentDisplayEvent[] = [];
+
+    switch (event.type) {
+      case 'message_update': {
+        const assistantEvent = event.assistantMessageEvent as Record<string, unknown> | undefined;
+        if (assistantEvent) {
+          const eventType = assistantEvent.type as string | undefined;
+          switch (eventType) {
+            case 'text_delta':
+            case 'text_end':
+              // Text content is accumulated in the message
+              break;
+            case 'tool_use_start':
+              events.push({
+                type: 'tool_use',
+                name: assistantEvent.name as string,
+                input: assistantEvent.input as Record<string, unknown>,
+              });
+              break;
+            case 'tool_use_end':
+              events.push({ type: 'tool_result' });
+              break;
+          }
+        }
+        break;
+      }
+
+      case 'message_end': {
+        const message = event.message as Record<string, unknown> | undefined;
+        if (message && Array.isArray(message.content)) {
+          for (const block of message.content) {
+            const blockType = (block as Record<string, unknown>).type as string;
+            if (blockType === 'text') {
+              const text = (block as Record<string, unknown>).text as string;
+              if (text) {
+                events.push({ type: 'text', content: text });
+              }
+            }
+          }
+        }
+        break;
+      }
+
+      case 'turn_end': {
+        const msg = event.message as Record<string, unknown> | undefined;
+        if (msg && Array.isArray(msg.toolResults) && msg.toolResults.length > 0) {
+          for (const result of msg.toolResults) {
+            const resultObj = result as Record<string, unknown>;
+            if (resultObj.error) {
+              events.push({
+                type: 'error',
+                message: String(resultObj.error),
+              });
+            }
+          }
+        }
+        break;
+      }
+    }
+
+    return events;
+  } catch {
+    // Not valid JSON - skip
+    return [];
+  }
+}
+
+/**
  * Pi Coding Agent plugin implementation.
  * Uses `pi --print --mode json` for non-interactive AI coding tasks.
  * Pi outputs structured JSONL with rich event types for subagent tracing.
@@ -282,77 +364,10 @@ export class PiAgentPlugin extends BaseAgentPlugin {
 
   /**
    * Parse a Pi JSONL line into standardized display events.
+   * Delegates to the standalone parsePiJsonLine function.
    */
   private parsePiJsonLine(jsonLine: string): AgentDisplayEvent[] {
-    if (!jsonLine || jsonLine.length === 0) return [];
-
-    try {
-      const event = JSON.parse(jsonLine) as Record<string, unknown>;
-      const events: AgentDisplayEvent[] = [];
-
-      switch (event.type) {
-        case 'message_update': {
-          const assistantEvent = event.assistantMessageEvent as Record<string, unknown> | undefined;
-          if (assistantEvent) {
-            const eventType = assistantEvent.type as string | undefined;
-            switch (eventType) {
-              case 'text_delta':
-              case 'text_end':
-                // Text content is accumulated in the message
-                break;
-              case 'tool_use_start':
-                events.push({
-                  type: 'tool_use',
-                  name: assistantEvent.name as string,
-                  input: assistantEvent.input as Record<string, unknown>,
-                });
-                break;
-              case 'tool_use_end':
-                events.push({ type: 'tool_result' });
-                break;
-            }
-          }
-          break;
-        }
-
-        case 'message_end': {
-          const message = event.message as Record<string, unknown> | undefined;
-          if (message && Array.isArray(message.content)) {
-            for (const block of message.content) {
-              const blockType = (block as Record<string, unknown>).type as string;
-              if (blockType === 'text') {
-                const text = (block as Record<string, unknown>).text as string;
-                if (text) {
-                  events.push({ type: 'text', content: text });
-                }
-              }
-            }
-          }
-          break;
-        }
-
-        case 'turn_end': {
-          const msg = event.message as Record<string, unknown> | undefined;
-          if (msg && Array.isArray(msg.toolResults) && msg.toolResults.length > 0) {
-            for (const result of msg.toolResults) {
-              const resultObj = result as Record<string, unknown>;
-              if (resultObj.error) {
-                events.push({
-                  type: 'error',
-                  message: String(resultObj.error),
-                });
-              }
-            }
-          }
-          break;
-        }
-      }
-
-      return events;
-    } catch {
-      // Not valid JSON - skip
-      return [];
-    }
+    return parsePiJsonLine(jsonLine);
   }
 
   /**

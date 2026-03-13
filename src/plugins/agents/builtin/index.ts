@@ -60,4 +60,4 @@ export { KiroAgentPlugin } from './kiro.js';
 export { CursorAgentPlugin } from './cursor.js';
 export { GithubCopilotAgentPlugin } from './github-copilot.js';
 export { KimiAgentPlugin } from './kimi.js';
-export { PiAgentPlugin } from './pi.js';
+export { PiAgentPlugin, parsePiJsonLine } from './pi.js';
