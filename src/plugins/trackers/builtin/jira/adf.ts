@@ -195,15 +195,16 @@ function renderList(node: AdfNode, type: 'bullet' | 'ordered'): string {
  */
 function renderListItemContent(nodes: AdfNode[], indent: number): string {
   const parts: string[] = [];
+  const indentStr = ' '.repeat(indent);
 
   for (const node of nodes) {
     if (node.type === 'paragraph') {
       // Inline the paragraph content (no double newline in list context)
-      parts.push(node.content ? renderNodes(node.content) : '');
+      const paragraph = node.content ? renderNodes(node.content) : '';
+      parts.push(parts.length === 0 ? paragraph : `\n\n${indentStr}${paragraph}`);
     } else if (node.type === 'bulletList' || node.type === 'orderedList') {
       // Nested list: indent each line
       const nestedContent = renderNode(node).trimEnd();
-      const indentStr = ' '.repeat(indent);
       const indented = nestedContent
         .split('\n')
         .map((line) => `${indentStr}${line}`)
@@ -263,7 +264,9 @@ function renderTable(node: AdfNode): string {
     .map((row) => {
       const cells = (row.content ?? []).map((cell) => {
         const content = cell.content ? renderNodes(cell.content).trim() : '';
-        return content.replace(/\|/g, '\\|'); // Escape pipes in cell content
+        return content
+          .replace(/\r?\n+/g, '<br>')
+          .replace(/\|/g, '\\|'); // Escape pipes in cell content
       });
       return {
         markdown: `| ${cells.join(' | ')} |`,
