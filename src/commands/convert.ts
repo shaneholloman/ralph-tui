@@ -1161,6 +1161,16 @@ export async function executeJiraConversion(
     process.exit(1);
   }
 
+  // Resolve labels: CLI takes precedence, then config fallback
+  let labels = args.labels ?? [];
+  if (labels.length === 0) {
+    const storedConfig = await loadStoredConfig();
+    const configLabels = storedConfig.trackerOptions?.labels;
+    if (typeof configLabels === 'string') {
+      labels = configLabels.split(',').map((l: string) => l.trim()).filter(Boolean);
+    }
+  }
+
   // Get issue types for the project to find Epic and Story type IDs
   let epicTypeId: string | undefined;
   let storyTypeId: string | undefined;
@@ -1224,6 +1234,7 @@ export async function executeJiraConversion(
           summary: parsed.name,
           issuetype: { id: epicTypeId },
           description: epicDescription,
+          labels,
         },
       });
 
@@ -1254,7 +1265,7 @@ export async function executeJiraConversion(
           summary: title,
           issuetype: { id: storyTypeId },
           description,
-          labels: args.labels ?? [],
+          labels,
         },
       });
 
