@@ -160,16 +160,25 @@ function isTombstone(brStatus: string): boolean {
 
 /**
  * Unwrap br JSON output which may be a bare array or an envelope object
- * with an `issues` key (br ≥ recent versions).
+ * with an `issues` key (br >= recent versions).
  */
 function unwrapBrJson(parsed: unknown): BrTaskJson[] {
   if (Array.isArray(parsed)) {
     return parsed as BrTaskJson[];
   }
-  if (parsed && typeof parsed === 'object' && 'issues' in parsed && Array.isArray((parsed as Record<string, unknown>).issues)) {
+  if (
+    parsed &&
+    typeof parsed === 'object' &&
+    'issues' in parsed &&
+    Array.isArray((parsed as Record<string, unknown>).issues)
+  ) {
     return (parsed as Record<string, unknown>).issues as BrTaskJson[];
   }
-  return [];
+
+  const unexpectedValue = JSON.stringify(parsed) ?? String(parsed);
+  throw new Error(
+    `unwrapBrJson expected BrTaskJson[] or { issues: BrTaskJson[] } but received: ${unexpectedValue}`
+  );
 }
 
 /**
