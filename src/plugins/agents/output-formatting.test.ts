@@ -257,6 +257,21 @@ describe('formatToolCall', () => {
     expect(result).toContain('--- a/file.ts');
   });
 
+  test('fallback normalizes patch content to a single line', () => {
+    const patch = '\n--- a/file.ts\n+++ b/file.ts\n@@ -1 +1 @@\n-old value\n+new value\n';
+    const result = formatToolCall('apply_patch', { patch } as unknown as Parameters<typeof formatToolCall>[1]);
+    expect(result).toContain('[apply_patch]');
+    expect(result).toContain('--- a/file.ts');
+    expect(result).not.toContain('\n--- a/file.ts\n+++ b/file.ts');
+  });
+
+  test('fallback prefers diff header when patch includes one', () => {
+    const patch = 'diff --git a/file.ts b/file.ts\nindex 123..456 100644\n--- a/file.ts\n+++ b/file.ts';
+    const result = formatToolCall('apply_patch', { patch } as unknown as Parameters<typeof formatToolCall>[1]);
+    expect(result).toContain('diff --git a/file.ts b/file.ts');
+    expect(result).not.toContain('index 123..456');
+  });
+
   test('fallback prioritizes path-like values', () => {
     const result = formatToolCall('read', { filename: '/src/index.ts', other: 'noise' } as unknown as Parameters<typeof formatToolCall>[1]);
     expect(result).toContain('[read]');
@@ -409,6 +424,15 @@ describe('formatToolCallSegments fallback', () => {
     const text = segmentsToPlainText(segments);
     expect(text).toContain('[read]');
     expect(text).toContain('/src/index.ts');
+  });
+
+  test('segment fallback normalizes patch content to one line', () => {
+    const patch = 'diff --git a/file.ts b/file.ts\nindex 123..456 100644\n--- a/file.ts\n+++ b/file.ts';
+    const segments = formatToolCallSegments('apply_patch', { patch } as Record<string, unknown>);
+    const text = segmentsToPlainText(segments);
+    expect(text).toContain('diff --git a/file.ts b/file.ts');
+    expect(text).not.toContain('index 123..456');
+    expect(text.split('\n').filter(Boolean)).toHaveLength(1);
   });
 
   test('no fallback when known fields present', () => {

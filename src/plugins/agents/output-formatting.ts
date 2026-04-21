@@ -143,6 +143,42 @@ export interface ToolInputFormatters {
 
 const FALLBACK_DISPLAY_KEYS = ['filename', 'fileName', 'filepath', 'filePath', 'patch'] as const;
 
+function looksLikeUnifiedDiff(value: string): boolean {
+  return value.split('\n').some(
+    (line) => line.startsWith('diff ') || line.startsWith('--- ') || line.startsWith('+++ ')
+  );
+}
+
+function summarizeUnifiedDiff(value: string): string {
+  const lines = value
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+
+  if (lines.length === 0) {
+    return '';
+  }
+
+  const headerLine = lines.find(
+    (line) => line.startsWith('diff ') || line.startsWith('--- ') || line.startsWith('+++ ')
+  );
+
+  return headerLine ?? lines[0]!;
+}
+
+function normalizeFallbackDisplayValue(key: string, value: string): string {
+  const displayValue = key === 'patch' || looksLikeUnifiedDiff(value)
+    ? summarizeUnifiedDiff(value)
+    : value;
+
+  const normalized = displayValue.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= 120) {
+    return normalized;
+  }
+
+  return normalized.slice(0, 120) + '...';
+}
+
 /**
  * Extract a fallback display string from tool input when no known fields matched.
  * Only considers known non-standard keys to avoid exposing arbitrary input values.
@@ -158,17 +194,16 @@ function extractFallbackDisplay(input: Record<string, unknown>): string | undefi
     if (typeof value !== 'string' || value.length === 0) continue;
 
     if (value.startsWith('/') || value.startsWith('./') || value.startsWith('~')) {
-      if (!bestPath) bestPath = value;
+      if (!bestPath) bestPath = normalizeFallbackDisplayValue(key, value);
     } else if (!bestValue) {
-      bestValue = value;
+      bestValue = normalizeFallbackDisplayValue(key, value);
     }
   }
 
   const result = bestPath ?? bestValue;
   if (!result) return undefined;
 
-  // Truncate if needed
-  return result.length > 120 ? result.slice(0, 120) + '...' : result;
+  return result;
 }
 
 /**
