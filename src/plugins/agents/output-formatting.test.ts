@@ -257,6 +257,21 @@ describe('formatToolCall', () => {
     expect(result).toContain('--- a/file.ts');
   });
 
+  test('fallback normalizes patch content to a single line', () => {
+    const patch = '\n--- a/file.ts\n+++ b/file.ts\n@@ -1 +1 @@\n-old value\n+new value\n';
+    const result = formatToolCall('apply_patch', { patch } as unknown as Parameters<typeof formatToolCall>[1]);
+    expect(result).toContain('[apply_patch]');
+    expect(result).toContain('--- a/file.ts');
+    expect(result).not.toContain('\n--- a/file.ts\n+++ b/file.ts');
+  });
+
+  test('fallback prefers diff header when patch includes one', () => {
+    const patch = 'diff --git a/file.ts b/file.ts\nindex 123..456 100644\n--- a/file.ts\n+++ b/file.ts';
+    const result = formatToolCall('apply_patch', { patch } as unknown as Parameters<typeof formatToolCall>[1]);
+    expect(result).toContain('diff --git a/file.ts b/file.ts');
+    expect(result).not.toContain('index 123..456');
+  });
+
   test('fallback prioritizes path-like values', () => {
     const result = formatToolCall('read', { filename: '/src/index.ts', other: 'noise' } as unknown as Parameters<typeof formatToolCall>[1]);
     expect(result).toContain('[read]');
@@ -267,8 +282,14 @@ describe('formatToolCall', () => {
     const longContent = 'x'.repeat(300);
     const result = formatToolCall('write', { body: longContent } as unknown as Parameters<typeof formatToolCall>[1]);
     expect(result).toContain('[write]');
-    // Long value should be skipped, only tool name shown
+    // Unknown keys should not be shown as fallback content.
     expect(result).not.toContain('xxx');
+  });
+
+  test('fallback ignores arbitrary unknown string fields', () => {
+    const result = formatToolCall('custom_tool', { token: 'super-secret-token' } as unknown as Parameters<typeof formatToolCall>[1]);
+    expect(result).toContain('[custom_tool]');
+    expect(result).not.toContain('super-secret-token');
   });
 
   test('combines all supported fields', () => {
@@ -405,12 +426,28 @@ describe('formatToolCallSegments fallback', () => {
     expect(text).toContain('/src/index.ts');
   });
 
+  test('segment fallback normalizes patch content to one line', () => {
+    const patch = 'diff --git a/file.ts b/file.ts\nindex 123..456 100644\n--- a/file.ts\n+++ b/file.ts';
+    const segments = formatToolCallSegments('apply_patch', { patch } as Record<string, unknown>);
+    const text = segmentsToPlainText(segments);
+    expect(text).toContain('diff --git a/file.ts b/file.ts');
+    expect(text).not.toContain('index 123..456');
+    expect(text.split('\n').filter(Boolean)).toHaveLength(1);
+  });
+
   test('no fallback when known fields present', () => {
     const segments = formatToolCallSegments('read', { file_path: '/src/index.ts' });
     const text = segmentsToPlainText(segments);
     expect(text).toContain('/src/index.ts');
-    // file_path is a known field, should use normal formatting (purple color) not fallback (muted)
-    const muted = segments.filter(s => s.color === 'muted');
-    expect(muted.length).toBe(0);
+    const pathSegments = segments.filter((s) => s.text.includes('/src/index.ts'));
+    expect(pathSegments).toHaveLength(1);
+    expect(pathSegments[0]?.color).toBe('purple');
+  });
+
+  test('does not show arbitrary unknown string fields', () => {
+    const segments = formatToolCallSegments('custom_tool', { token: 'super-secret-token' } as Record<string, unknown>);
+    const text = segmentsToPlainText(segments);
+    expect(text).toContain('[custom_tool]');
+    expect(text).not.toContain('super-secret-token');
   });
 });
