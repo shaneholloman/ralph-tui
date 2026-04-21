@@ -94,6 +94,36 @@ type ParallelFailureCarrier = {
   failureMessage: string | null;
 };
 
+type ParallelTrackerRefreshCarrier = {
+  refreshedTasks: TrackerTask[] | undefined;
+};
+
+type ParallelRestartStateCarrier = ParallelFailureCarrier & ParallelTrackerRefreshCarrier & {
+  workers: WorkerDisplayState[];
+  workerOutputs: Map<string, string[]>;
+  mergeQueue: MergeOperation[];
+  currentGroup: number;
+  totalGroups: number;
+  conflicts: FileConflict[];
+  conflictResolutions: ConflictResolutionResult[];
+  conflictTaskId: string;
+  conflictTaskTitle: string;
+  aiResolving: boolean;
+  currentlyResolvingFile: string;
+  showConflicts: boolean;
+  taskIdToWorkerId: Map<string, string>;
+  completedLocallyTaskIds: Set<string>;
+  autoCommitSkippedTaskIds: Set<string>;
+  mergedTaskIds: Set<string>;
+  sessionBranch: string | null;
+  originalBranch: string | null;
+  completionSummaryLines: string[] | undefined;
+  completionSummaryPath: string | undefined;
+  completionSummaryWriteError: string | undefined;
+};
+
+const TRACKER_REFRESH_STATUSES = ['open', 'in_progress', 'completed'] as const;
+
 export function applyParallelFailureState(
   currentState: PersistedSessionState,
   parallelState: ParallelFailureCarrier,
@@ -237,6 +267,64 @@ export function propagateSettingsToEngine(
   if (newConfig.autoCommit !== undefined) {
     engine.setAutoCommit(newConfig.autoCommit);
   }
+}
+
+export async function refreshParallelTrackerTasks(
+  tracker: Pick<TrackerPlugin, 'getTasks'> | null | undefined,
+  parallelState: ParallelTrackerRefreshCarrier,
+  triggerRerender: (() => void) | null,
+): Promise<void> {
+  if (!tracker) return;
+
+  try {
+    const freshTasks = await tracker.getTasks({ status: [...TRACKER_REFRESH_STATUSES] });
+    parallelState.refreshedTasks = freshTasks;
+    triggerRerender?.();
+  } catch {
+    // Tracker refresh is best-effort; don't crash the TUI
+  }
+}
+
+export async function refreshParallelTrackerTasksImmediately(
+  tracker: Pick<TrackerPlugin, 'getTasks'> | null | undefined,
+  parallelState: ParallelTrackerRefreshCarrier,
+  triggerRerender: (() => void) | null,
+  refreshTimer: ReturnType<typeof setTimeout> | null,
+): Promise<ReturnType<typeof setTimeout> | null> {
+  if (!tracker) return refreshTimer;
+
+  if (refreshTimer) {
+    clearTimeout(refreshTimer);
+  }
+
+  await refreshParallelTrackerTasks(tracker, parallelState, triggerRerender);
+  return null;
+}
+
+export function resetParallelStateForRestart(parallelState: ParallelRestartStateCarrier): void {
+  parallelState.failureMessage = null;
+  parallelState.workers = [];
+  parallelState.workerOutputs = new Map();
+  parallelState.mergeQueue = [];
+  parallelState.currentGroup = 0;
+  parallelState.totalGroups = 0;
+  parallelState.conflicts = [];
+  parallelState.conflictResolutions = [];
+  parallelState.conflictTaskId = '';
+  parallelState.conflictTaskTitle = '';
+  parallelState.aiResolving = false;
+  parallelState.currentlyResolvingFile = '';
+  parallelState.showConflicts = false;
+  parallelState.taskIdToWorkerId = new Map();
+  parallelState.completedLocallyTaskIds = new Set();
+  parallelState.autoCommitSkippedTaskIds = new Set();
+  parallelState.mergedTaskIds = new Set();
+  parallelState.sessionBranch = null;
+  parallelState.originalBranch = null;
+  parallelState.refreshedTasks = undefined;
+  parallelState.completionSummaryLines = undefined;
+  parallelState.completionSummaryPath = undefined;
+  parallelState.completionSummaryWriteError = undefined;
 }
 
 /**
@@ -937,12 +1025,12 @@ ralph-tui run - Start Ralph execution
 Usage: ralph-tui run [options]
 
 Options:
-  --epic <id>         Epic ID for beads tracker (if omitted, shows epic selection)
+  --epic <id>         Epic/parent issue ID for beads or linear tracker
   --prd <path>        PRD file path (auto-switches to json tracker)
   --agent <name>      Override agent plugin (e.g., claude, opencode)
   --model <name>      Override model (e.g., opus, sonnet)
   --variant <level>   Model variant/reasoning effort (minimal, high, max)
-  --tracker <name>    Override tracker plugin (e.g., beads, beads-bv, json)
+  --tracker <name>    Override tracker plugin (e.g., beads, beads-bv, json, linear)
   --prompt <path>     Custom prompt file (default: based on tracker mode)
   --output-dir <path> Directory for iteration logs (default: .ralph-tui/iterations)
   --progress-file <path> Progress file for cross-iteration context (default: .ralph-tui/progress.md)
@@ -991,6 +1079,7 @@ Examples:
   ralph-tui run --prd ./prd.json             # Run with PRD file
   ralph-tui run --agent claude --model opus  # Override agent settings
   ralph-tui run --tracker beads-bv           # Use beads-bv tracker
+  ralph-tui run --tracker linear --epic ENG-123  # Run from Linear parent issue
   ralph-tui run --iterations 20              # Limit to 20 iterations
   ralph-tui run --resume                     # Resume previous session
   ralph-tui run --no-tui                     # Run headless for CI/scripts
@@ -1499,6 +1588,10 @@ interface RunAppWrapperProps {
   onConflictRetry?: () => Promise<void>;
   /** Callback when user requests to skip a failed merge */
   onConflictSkip?: () => void;
+  /** Refreshed tasks from tracker (parallel mode auto-refresh) */
+  parallelRefreshedTasks?: TrackerTask[];
+  /** Callback to manually refresh tasks in parallel mode (for 'r' key) */
+  onRefreshTasks?: () => void;
 }
 
 /**
@@ -1554,6 +1647,8 @@ function RunAppWrapper({
   onParallelStart,
   onConflictRetry,
   onConflictSkip,
+  parallelRefreshedTasks,
+  onRefreshTasks,
 }: RunAppWrapperProps) {
   const [showInterruptDialog, setShowInterruptDialog] = useState(false);
   const [storedConfig, setStoredConfig] = useState<StoredConfig | undefined>(initialStoredConfig);
@@ -1781,6 +1876,8 @@ function RunAppWrapper({
       onParallelStart={onParallelStart}
       onConflictRetry={onConflictRetry}
       onConflictSkip={onConflictSkip}
+      parallelRefreshedTasks={parallelRefreshedTasks}
+      onRefreshTasks={onRefreshTasks}
     />
   );
 }
@@ -2125,6 +2222,7 @@ async function runParallelWithTui(
   initialTasks: TrackerTask[],
   directMerge: boolean,
   storedConfig?: StoredConfig,
+  tracker?: TrackerPlugin,
 ): Promise<ParallelTuiRunResult> {
   let currentState = persistedState;
   let resolveQuitPromise: (() => void) | null = null;
@@ -2168,6 +2266,8 @@ async function runParallelWithTui(
     sessionBranch: null as string | null,
     /** Original branch before session branch was created */
     originalBranch: null as string | null,
+    /** Refreshed tasks from tracker (set after worker/merge completion) */
+    refreshedTasks: undefined as TrackerTask[] | undefined,
     /** Completion summary lines for in-TUI display */
     completionSummaryLines: undefined as string[] | undefined,
     /** Summary file path for in-TUI display */
@@ -2183,29 +2283,18 @@ async function runParallelWithTui(
   let executionPromise: Promise<void> | null = null;
   let shutdownPromise: Promise<void> | null = null;
 
-  const resetParallelStateForRestart = (): void => {
-    parallelState.failureMessage = null;
-    parallelState.workers = [];
-    parallelState.workerOutputs = new Map();
-    parallelState.mergeQueue = [];
-    parallelState.currentGroup = 0;
-    parallelState.totalGroups = 0;
-    parallelState.conflicts = [];
-    parallelState.conflictResolutions = [];
-    parallelState.conflictTaskId = '';
-    parallelState.conflictTaskTitle = '';
-    parallelState.aiResolving = false;
-    parallelState.currentlyResolvingFile = '';
-    parallelState.showConflicts = false;
-    parallelState.taskIdToWorkerId = new Map();
-    parallelState.completedLocallyTaskIds = new Set();
-    parallelState.autoCommitSkippedTaskIds = new Set();
-    parallelState.mergedTaskIds = new Set();
-    parallelState.sessionBranch = null;
-    parallelState.originalBranch = null;
-    parallelState.completionSummaryLines = undefined;
-    parallelState.completionSummaryPath = undefined;
-    parallelState.completionSummaryWriteError = undefined;
+  // Debounced tracker refresh — avoids hammering tracker when multiple workers finish simultaneously
+  let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+  const scheduleTrackerRefresh = (): void => {
+    if (!tracker) return;
+    if (refreshTimer) clearTimeout(refreshTimer);
+    refreshTimer = setTimeout(async () => {
+      await refreshParallelTrackerTasks(tracker, parallelState, triggerRerender);
+    }, 2000);
+  };
+
+  const resetParallelRunStateForRestart = (): void => {
+    resetParallelStateForRestart(parallelState);
     completionMetrics = null;
     finalSummary = null;
     finalSummaryPath = null;
@@ -2350,6 +2439,8 @@ async function runParallelWithTui(
           event.result.taskCompleted,
           event.result.commitCount
         );
+        // Refresh task list to pick up any new beads created by the agent
+        scheduleTrackerRefresh();
         break;
 
       case 'worker:failed':
@@ -2379,6 +2470,8 @@ async function runParallelWithTui(
           ...parallelState.mergedTaskIds,
           event.taskId,
         ]);
+        // Refresh task list to pick up any new beads created by the agent
+        scheduleTrackerRefresh();
         break;
       }
 
@@ -2437,6 +2530,8 @@ async function runParallelWithTui(
         );
         parallelState.completedLocallyTaskIds = taskTracking.completedLocallyTaskIds;
         parallelState.mergedTaskIds = taskTracking.mergedTaskIds;
+        // Refresh tracker-backed tasks after conflict resolution commits or requeues.
+        scheduleTrackerRefresh();
         break;
       }
 
@@ -2586,6 +2681,10 @@ async function runParallelWithTui(
       return () => {
         triggerRerender = null;
         clearInterval(pollInterval);
+        if (refreshTimer) {
+          clearTimeout(refreshTimer);
+          refreshTimer = null;
+        }
       };
     }, []);
 
@@ -2650,7 +2749,7 @@ async function runParallelWithTui(
             return;
           }
           // Reset executor state and re-run
-          resetParallelStateForRestart();
+          resetParallelRunStateForRestart();
           currentState = {
             ...currentState,
             status: 'running',
@@ -2682,6 +2781,15 @@ async function runParallelWithTui(
           // Clear conflict state
           clearConflictState(parallelState);
           triggerRerender?.();
+        }}
+        parallelRefreshedTasks={parallelState.refreshedTasks}
+        onRefreshTasks={async () => {
+          refreshTimer = await refreshParallelTrackerTasksImmediately(
+            tracker,
+            parallelState,
+            triggerRerender,
+            refreshTimer
+          );
         }}
       />
     );
@@ -3649,7 +3757,7 @@ export async function executeRunCommand(args: string[]): Promise<void> {
       if (config.showTui) {
         // Parallel TUI mode — visualize workers, merges, and conflicts
         const parallelTuiResult = await runParallelWithTui(
-          parallelExecutor, persistedState, config, tasks, directMerge, storedConfig
+          parallelExecutor, persistedState, config, tasks, directMerge, storedConfig, tracker
         );
         persistedState = parallelTuiResult.state;
         parallelSummaryForGuidance = parallelTuiResult.summary;
