@@ -12,6 +12,7 @@ import { useState, useCallback, useEffect, useMemo, useRef, startTransition } fr
 import { colors, layout } from '../theme.js';
 import type { RalphStatus, TaskStatus } from '../theme.js';
 import type { TaskItem, BlockerInfo, DetailsViewMode, IterationTimingInfo, SubagentTreeNode } from '../types.js';
+import { preserveCurrentSessionCompletions } from '../task-state.js';
 import { Header } from './Header.js';
 import { Footer } from './Footer.js';
 import { LeftPanel } from './LeftPanel.js';
@@ -574,7 +575,12 @@ export function RunApp({
   // Update task list when parallel mode provides refreshed tasks from tracker
   useEffect(() => {
     if (parallelRefreshedTasks) {
-      setTasks(convertTasksWithDependencyStatus(parallelRefreshedTasks));
+      setTasks((prev) =>
+        preserveCurrentSessionCompletions(
+          prev,
+          convertTasksWithDependencyStatus(parallelRefreshedTasks)
+        )
+      );
     }
   }, [parallelRefreshedTasks]);
 
@@ -1838,7 +1844,12 @@ export function RunApp({
 
         case 'tasks:refreshed':
           // Update task list with fresh data from tracker
-          setTasks(convertTasksWithDependencyStatus(event.tasks));
+          setTasks((prev) =>
+            preserveCurrentSessionCompletions(
+              prev,
+              convertTasksWithDependencyStatus(event.tasks)
+            )
+          );
           break;
 
         case 'engine:iterations-added':

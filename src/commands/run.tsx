@@ -2469,6 +2469,8 @@ async function runParallelWithTui(
         );
         parallelState.completedLocallyTaskIds = taskTracking.completedLocallyTaskIds;
         parallelState.mergedTaskIds = taskTracking.mergedTaskIds;
+        // Refresh tracker-backed tasks after conflict resolution commits or requeues.
+        scheduleTrackerRefresh();
         break;
       }
 
