@@ -10,11 +10,9 @@ import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 
 // @ts-expect-error - Bun supports query strings in imports to get fresh module instances
-const actualAgentRegistryModule =
-  (await import('../plugins/agents/registry.js?test-reload-migration-install-registry')) as typeof import('../plugins/agents/registry.js');
+const actualAgentRegistryModule = await import('../plugins/agents/registry.js?test-reload') as typeof import('../plugins/agents/registry.js');
 // @ts-expect-error - Bun supports query strings in imports to get fresh module instances
-const actualTemplateEngineModule =
-  (await import('../templates/engine.js?test-reload-migration-install-templates')) as typeof import('../templates/engine.js');
+const actualTemplateEngineModule = await import('../templates/engine.js?test-reload') as typeof import('../templates/engine.js');
 
 let mockInstallResult = { success: true, output: '' };
 let mockAgentAvailable = true;

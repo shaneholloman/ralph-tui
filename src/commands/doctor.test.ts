@@ -18,8 +18,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 // @ts-expect-error - Bun supports query strings in imports to get fresh module instances
-const actualAgentRegistryModule =
-  (await import('../plugins/agents/registry.js?test-reload-doctor-registry')) as typeof import('../plugins/agents/registry.js');
+const actualAgentRegistryModule = await import('../plugins/agents/registry.js?test-reload') as typeof import('../plugins/agents/registry.js');
 
 // Types for mock results
 interface MockDetectResult {

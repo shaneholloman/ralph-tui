@@ -88,8 +88,7 @@ beforeAll(async () => {
 
   // Mock template engine to avoid file system operations
   // @ts-expect-error - Bun supports query strings in imports to get fresh module instances
-  const realTemplateEngine =
-    (await import('../templates/engine.js?test-reload-migration-templates')) as typeof import('../templates/engine.js');
+  const realTemplateEngine = await import('../templates/engine.js?test-reload') as typeof import('../templates/engine.js');
   mock.module('../templates/engine.js', () => ({
     ...realTemplateEngine,
     installBuiltinTemplates: () => ({
@@ -106,8 +105,7 @@ beforeAll(async () => {
   }));
 
   // @ts-expect-error - Bun supports query strings in imports to get fresh module instances
-  const actualAgentRegistryModule =
-    (await import('../plugins/agents/registry.js?test-reload-migration-registry')) as typeof import('../plugins/agents/registry.js');
+  const actualAgentRegistryModule = await import('../plugins/agents/registry.js?test-reload') as typeof import('../plugins/agents/registry.js');
   mock.module('../plugins/agents/registry.js', () => ({
     ...actualAgentRegistryModule,
     getAgentRegistry: () => ({
